@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
+import { spawnSync } from "child_process";
 import { useContainers } from "../hooks/useProxmox.ts";
 import { useKeyboardNavigation } from "../hooks/useKeyboard.ts";
 import { Spinner } from "../components/common/Spinner.tsx";
@@ -10,7 +11,11 @@ import type { Container } from "../api/types.ts";
 
 type PendingAction = { type: "stop" | "reboot"; vmid: number; node: string; name: string } | null;
 
-export function Containers() {
+interface ContainersProps {
+  host: string;
+}
+
+export function Containers({ host }: ContainersProps) {
   const { containers: unsortedContainers, loading, error, refresh, startContainer, stopContainer, rebootContainer } =
     useContainers();
 
@@ -20,10 +25,54 @@ export function Containers() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [selectedContainer, setSelectedContainer] = useState<Container | null>(null);
+  const [consoleActive, setConsoleActive] = useState(false);
+
+  // Extract hostname from Proxmox URL for SSH
+  const proxmoxHost = (() => {
+    try {
+      const url = new URL(host);
+      return url.hostname;
+    } catch {
+      return host;
+    }
+  })();
+
+  // Handle console - SSH to Proxmox host and run pct enter
+  const handleConsole = (vmid: number, _node: string) => {
+    setConsoleActive(true);
+
+    // Give React a moment to update, then run SSH synchronously
+    setTimeout(() => {
+      // Pause Ink's stdin handling and reset terminal
+      process.stdin.setRawMode?.(false);
+      process.stdout.write("\x1b[?25h"); // Show cursor
+      console.clear();
+
+      // Run SSH synchronously - blocks until user exits
+      // Use 'pct console' to get login prompt (like Proxmox web UI)
+      spawnSync("ssh", [
+        "-t",
+        "-o", "StrictHostKeyChecking=accept-new",
+        `root@${proxmoxHost}`,
+        `pct console ${vmid}`
+      ], {
+        stdio: "inherit",
+      });
+
+      // Restore terminal for Ink
+      console.clear();
+      process.stdin.setRawMode?.(true);
+      process.stdin.resume();
+
+      setConsoleActive(false);
+      setSelectedContainer(null);
+      refresh();
+    }, 50);
+  };
 
   const { selectedIndex } = useKeyboardNavigation({
     itemCount: containers.length,
-    enabled: !actionLoading && !pendingAction && !selectedContainer,
+    enabled: !actionLoading && !pendingAction && !selectedContainer && !consoleActive,
   });
 
   useInput(
@@ -89,8 +138,17 @@ export function Containers() {
         setPendingAction({ type: "reboot", vmid: container.vmid, node: container.node, name: container.name || `CT ${container.vmid}` });
       }
     },
-    { isActive: !selectedContainer }
+    { isActive: !selectedContainer && !consoleActive }
   );
+
+  // Show message while console is active (SSH takes over the terminal)
+  if (consoleActive) {
+    return (
+      <Box flexDirection="column">
+        <Spinner label="Console session active..." />
+      </Box>
+    );
+  }
 
   // Show detail view if a container is selected
   if (selectedContainer) {
@@ -111,6 +169,7 @@ export function Containers() {
         onReboot={async () => {
           await rebootContainer(selectedContainer.node, selectedContainer.vmid);
         }}
+        onConsole={handleConsole}
       />
     );
   }

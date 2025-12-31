@@ -69,7 +69,7 @@ export function App({ config }: AppProps) {
       case "vms":
         return <VMs />;
       case "containers":
-        return <Containers />;
+        return <Containers host={config.host} />;
       case "storage":
         return <Storage />;
       default:

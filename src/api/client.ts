@@ -9,6 +9,7 @@ import type {
   Storage,
   Task,
   ResourceSummary,
+  NetworkInterface,
 } from "./types.ts";
 
 export class ProxmoxClient {
@@ -184,6 +185,10 @@ export class ProxmoxClient {
 
   async getContainerConfig(node: string, vmid: number): Promise<ContainerConfig> {
     return this.request<ContainerConfig>("GET", `/nodes/${node}/lxc/${vmid}/config`);
+  }
+
+  async getContainerInterfaces(node: string, vmid: number): Promise<NetworkInterface[]> {
+    return this.request<NetworkInterface[]>("GET", `/nodes/${node}/lxc/${vmid}/interfaces`);
   }
 
   // Storage operations

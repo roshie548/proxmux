@@ -123,3 +123,11 @@ export interface ResourceSummary {
   disk?: number;
   maxdisk?: number;
 }
+
+// Network interface (from container/VM)
+export interface NetworkInterface {
+  name: string;
+  hwaddr?: string;
+  "inet"?: string;
+  "inet6"?: string;
+}

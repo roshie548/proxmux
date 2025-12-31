@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text, useInput, useStdout } from "ink";
 import { StatusBadge } from "./common/StatusBadge.tsx";
 import { ProgressBar } from "./common/ProgressBar.tsx";
 import { Spinner } from "./common/Spinner.tsx";
 import { formatBytes, formatUptime } from "../utils/format.ts";
 import { getClient } from "../api/client.ts";
-import type { VMConfig, ContainerConfig } from "../api/types.ts";
+import type { VMConfig, ContainerConfig, NetworkInterface } from "../api/types.ts";
 
 interface DetailViewProps {
   type: "vm" | "container";
@@ -26,9 +26,10 @@ interface DetailViewProps {
   onStart: () => Promise<void>;
   onStop: () => Promise<void>;
   onReboot: () => Promise<void>;
+  onConsole?: (vmid: number, node: string) => void;
 }
 
-type Action = "start" | "stop" | "reboot";
+type Action = "start" | "stop" | "reboot" | "console";
 type PendingConfirm = Action | null;
 
 function parseNetworkInfo(netConfig?: string): { ip?: string; mac?: string; bridge?: string } {
@@ -59,19 +60,29 @@ export function DetailView({
   onStart,
   onStop,
   onReboot,
+  onConsole,
 }: DetailViewProps) {
+  const { stdout } = useStdout();
+  const terminalWidth = stdout?.columns || 80;
+
   const [selectedAction, setSelectedAction] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm>(null);
   const [config, setConfig] = useState<VMConfig | ContainerConfig | null>(null);
   const [configLoading, setConfigLoading] = useState(true);
+  const [interfaces, setInterfaces] = useState<NetworkInterface[]>([]);
 
   const isRunning = item.status === "running";
 
-  // Fetch config on mount
+  // Dynamic widths based on terminal size
+  const actionsWidth = 22;
+  const infoWidth = Math.max(40, terminalWidth - actionsWidth - 10); // 10 for gaps/borders
+  const progressBarWidth = Math.max(8, Math.min(15, infoWidth - 50)); // Smaller bars
+
+  // Fetch config and interfaces on mount
   useEffect(() => {
-    const fetchConfig = async () => {
+    const fetchData = async () => {
       try {
         const client = getClient();
         if (type === "vm") {
@@ -80,6 +91,15 @@ export function DetailView({
         } else {
           const cfg = await client.getContainerConfig(item.node, item.vmid);
           setConfig(cfg);
+          // Fetch live interfaces for containers (to get actual IP)
+          if (isRunning) {
+            try {
+              const ifaces = await client.getContainerInterfaces(item.node, item.vmid);
+              setInterfaces(ifaces);
+            } catch {
+              // Interfaces fetch failed, continue without it
+            }
+          }
         }
       } catch {
         // Config fetch failed, continue without it
@@ -87,13 +107,28 @@ export function DetailView({
         setConfigLoading(false);
       }
     };
-    fetchConfig();
-  }, [type, item.node, item.vmid]);
+    fetchData();
+  }, [type, item.node, item.vmid, isRunning]);
+
+  // Get live IP from interfaces (prefer eth0, then any interface with an IP)
+  const liveIp = (() => {
+    const eth0 = interfaces.find((i) => i.name === "eth0");
+    if (eth0?.inet) return eth0.inet.split("/")[0];
+    const withIp = interfaces.find((i) => i.inet && i.name !== "lo");
+    if (withIp?.inet) return withIp.inet.split("/")[0];
+    return null;
+  })();
+
+  // Fall back to config IP if no live IP
+  const netInfo = parseNetworkInfo(config?.net0);
+  const displayIp = liveIp || netInfo.ip;
+  const hasConsole = type === "container" && isRunning && onConsole;
 
   const actions: { key: Action; label: string; enabled: boolean; destructive: boolean }[] = [
     { key: "start", label: "Start", enabled: !isRunning, destructive: false },
     { key: "stop", label: "Stop", enabled: isRunning, destructive: true },
     { key: "reboot", label: "Reboot", enabled: isRunning, destructive: true },
+    { key: "console", label: "Console (SSH)", enabled: !!hasConsole, destructive: false },
   ];
 
   const enabledActions = actions.filter((a) => a.enabled);
@@ -142,6 +177,12 @@ export function DetailView({
         return;
       }
 
+      // Handle console action
+      if (action.key === "console" && onConsole) {
+        onConsole(item.vmid, item.node);
+        return;
+      }
+
       setLoading(true);
       setError(null);
       try {
@@ -159,9 +200,6 @@ export function DetailView({
   const diskPercent = item.maxdisk > 0 ? (item.disk / item.maxdisk) * 100 : 0;
 
   const label = type === "vm" ? "Virtual Machine" : "Container";
-
-  // Parse network info from config
-  const netInfo = parseNetworkInfo(config?.net0);
 
   return (
     <Box flexDirection="column">
@@ -182,7 +220,7 @@ export function DetailView({
 
       <Box flexDirection="row" gap={2}>
         {/* Left: Info */}
-        <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={2} paddingY={1} width={50}>
+        <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={2} paddingY={1} width={infoWidth}>
           <Box marginBottom={1}>
             <StatusBadge status={item.status} />
             <Text> </Text>
@@ -193,56 +231,57 @@ export function DetailView({
           <Box marginBottom={1} flexDirection="column">
             <Text bold dimColor>General</Text>
             <Box>
-              <Box width={14}><Text dimColor>ID:</Text></Box>
+              <Box width={16}><Text dimColor>ID:</Text></Box>
               <Text>{item.vmid}</Text>
             </Box>
             <Box>
-              <Box width={14}><Text dimColor>Node:</Text></Box>
+              <Box width={16}><Text dimColor>Node:</Text></Box>
               <Text>{item.node}</Text>
             </Box>
             <Box>
-              <Box width={14}><Text dimColor>Status:</Text></Box>
+              <Box width={16}><Text dimColor>Status:</Text></Box>
               <Text>{item.status}</Text>
             </Box>
             {isRunning && (
               <Box>
-                <Box width={14}><Text dimColor>Uptime:</Text></Box>
+                <Box width={16}><Text dimColor>Uptime:</Text></Box>
                 <Text>{formatUptime(item.uptime)}</Text>
               </Box>
             )}
             {config?.tags && (
               <Box>
-                <Box width={14}><Text dimColor>Tags:</Text></Box>
+                <Box width={16}><Text dimColor>Tags:</Text></Box>
                 <Text color="cyan">{config.tags}</Text>
               </Box>
             )}
             {config?.onboot !== undefined && (
               <Box>
-                <Box width={14}><Text dimColor>Start on boot:</Text></Box>
+                <Box width={16}><Text dimColor>Start on boot:</Text></Box>
                 <Text>{config.onboot ? "Yes" : "No"}</Text>
               </Box>
             )}
           </Box>
 
           {/* Network Info */}
-          {(netInfo.ip || netInfo.mac || netInfo.bridge) && (
+          {(displayIp || netInfo.mac || netInfo.bridge) && (
             <Box marginBottom={1} flexDirection="column">
               <Text bold dimColor>Network</Text>
-              {netInfo.ip && (
+              {displayIp && (
                 <Box>
-                  <Box width={14}><Text dimColor>IP Address:</Text></Box>
-                  <Text>{netInfo.ip}</Text>
+                  <Box width={16}><Text dimColor>IP Address:</Text></Box>
+                  <Text>{displayIp}</Text>
+                  {liveIp && <Text color="green"> (live)</Text>}
                 </Box>
               )}
               {netInfo.mac && (
                 <Box>
-                  <Box width={14}><Text dimColor>MAC:</Text></Box>
+                  <Box width={16}><Text dimColor>MAC:</Text></Box>
                   <Text>{netInfo.mac}</Text>
                 </Box>
               )}
               {netInfo.bridge && (
                 <Box>
-                  <Box width={14}><Text dimColor>Bridge:</Text></Box>
+                  <Box width={16}><Text dimColor>Bridge:</Text></Box>
                   <Text>{netInfo.bridge}</Text>
                 </Box>
               )}
@@ -251,7 +290,7 @@ export function DetailView({
 
           {/* Config loading */}
           {configLoading && (
-            <Box>
+            <Box marginBottom={1}>
               <Spinner label="Loading config..." />
             </Box>
           )}
@@ -260,19 +299,19 @@ export function DetailView({
           <Box flexDirection="column">
             <Text bold dimColor>Resources</Text>
             <Box>
-              <Box width={14}><Text dimColor>CPU:</Text></Box>
-              <ProgressBar percent={cpuPercent} width={15} />
-              <Text dimColor> {item.cpus} cores</Text>
+              <Box width={16}><Text dimColor>CPU:</Text></Box>
+              <Box width={progressBarWidth + 2}><ProgressBar percent={cpuPercent} width={progressBarWidth} showPercent={false} /></Box>
+              <Text> {cpuPercent.toFixed(0)}% ({item.cpus} cores)</Text>
             </Box>
             <Box>
-              <Box width={14}><Text dimColor>Memory:</Text></Box>
-              <ProgressBar percent={memPercent} width={15} />
-              <Text dimColor> {formatBytes(item.mem)} / {formatBytes(item.maxmem)}</Text>
+              <Box width={16}><Text dimColor>Memory:</Text></Box>
+              <Box width={progressBarWidth + 2}><ProgressBar percent={memPercent} width={progressBarWidth} showPercent={false} /></Box>
+              <Text> {formatBytes(item.mem)} / {formatBytes(item.maxmem)}</Text>
             </Box>
             <Box>
-              <Box width={14}><Text dimColor>Disk:</Text></Box>
-              <ProgressBar percent={diskPercent} width={15} />
-              <Text dimColor> {formatBytes(item.disk)} / {formatBytes(item.maxdisk)}</Text>
+              <Box width={16}><Text dimColor>Disk:</Text></Box>
+              <Box width={progressBarWidth + 2}><ProgressBar percent={diskPercent} width={progressBarWidth} showPercent={false} /></Box>
+              <Text> {formatBytes(item.disk)} / {formatBytes(item.maxdisk)}</Text>
             </Box>
           </Box>
 
@@ -286,7 +325,7 @@ export function DetailView({
         </Box>
 
         {/* Right: Actions */}
-        <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={2} paddingY={1} minWidth={20}>
+        <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={2} paddingY={1} width={actionsWidth}>
           <Box marginBottom={1}>
             <Text bold dimColor>Actions</Text>
           </Box>
