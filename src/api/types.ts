@@ -60,14 +60,26 @@ export interface ContainerConfig {
   hostname?: string;
   description?: string;
   memory?: number;
+  swap?: number;
   cores?: number;
+  cpulimit?: number;
+  cpuunits?: number;
   ostype?: string;
+  arch?: string;
   net0?: string;
   net1?: string;
+  net2?: string;
+  net3?: string;
   rootfs?: string;
   tags?: string;
   onboot?: number;
+  startup?: string;
   unprivileged?: number;
+  protection?: number;
+  features?: string;
+  cmode?: "tty" | "console" | "shell";
+  lock?: string;
+  template?: number;
 }
 
 // Container (LXC) types
@@ -80,6 +92,8 @@ export interface Container {
   cpus: number;
   mem: number;
   maxmem: number;
+  swap?: number;
+  maxswap?: number;
   disk: number;
   maxdisk: number;
   uptime: number;
