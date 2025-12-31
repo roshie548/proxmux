@@ -1,0 +1,22 @@
+{
+  "name": "proxmux",
+  "version": "0.1.0",
+  "description": "Terminal UI for managing Proxmox VE",
+  "type": "module",
+  "bin": {
+    "proxmux": "./src/index.tsx"
+  },
+  "scripts": {
+    "start": "bun run src/index.tsx",
+    "dev": "bun --watch run src/index.tsx"
+  },
+  "dependencies": {
+    "ink": "^5.0.1",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^18.3.12",
+    "typescript": "^5.7.2"
+  }
+}
