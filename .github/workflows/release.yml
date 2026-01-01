@@ -46,6 +46,7 @@ jobs:
             dist/proxmux-darwin-arm64
             dist/proxmux-darwin-x64
             dist/proxmux-linux-x64
+            dist/proxmux-linux-x64-baseline
             dist/proxmux-linux-arm64
             dist/proxmux-windows-x64.exe
           body: |
@@ -61,6 +62,7 @@ jobs:
             - **macOS Apple Silicon**: `proxmux-darwin-arm64`
             - **macOS Intel**: `proxmux-darwin-x64`
             - **Linux x64**: `proxmux-linux-x64`
+            - **Linux x64 (older CPUs)**: `proxmux-linux-x64-baseline` - use this if you get "Illegal instruction" errors
             - **Linux ARM64**: `proxmux-linux-arm64`
             - **Windows**: `proxmux-windows-x64.exe`
 

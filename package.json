@@ -1,6 +1,6 @@
 {
   "name": "proxmux",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Terminal UI for managing Proxmox VE",
   "author": "Roshan Kumaraswamy",
   "license": "MIT",
@@ -34,9 +34,10 @@
     "build:darwin-arm64": "bun build ./src/index.tsx --compile --minify --target=bun-darwin-arm64 --outfile dist/proxmux-darwin-arm64",
     "build:darwin-x64": "bun build ./src/index.tsx --compile --minify --target=bun-darwin-x64 --outfile dist/proxmux-darwin-x64",
     "build:linux-x64": "bun build ./src/index.tsx --compile --minify --target=bun-linux-x64 --outfile dist/proxmux-linux-x64",
+    "build:linux-x64-baseline": "bun build ./src/index.tsx --compile --minify --target=bun-linux-x64-baseline --outfile dist/proxmux-linux-x64-baseline",
     "build:linux-arm64": "bun build ./src/index.tsx --compile --minify --target=bun-linux-arm64 --outfile dist/proxmux-linux-arm64",
     "build:windows-x64": "bun build ./src/index.tsx --compile --minify --target=bun-windows-x64 --outfile dist/proxmux-windows-x64.exe",
-    "build:all": "bun run build:darwin-arm64 && bun run build:darwin-x64 && bun run build:linux-x64 && bun run build:linux-arm64 && bun run build:windows-x64"
+    "build:all": "bun run build:darwin-arm64 && bun run build:darwin-x64 && bun run build:linux-x64 && bun run build:linux-x64-baseline && bun run build:linux-arm64 && bun run build:windows-x64"
   },
   "engines": {
     "bun": ">=1.0.0"
