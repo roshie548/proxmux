@@ -5,7 +5,8 @@ import { ProgressBar } from "./common/ProgressBar.tsx";
 import { Spinner } from "./common/Spinner.tsx";
 import { formatBytes, formatUptime } from "../utils/format.ts";
 import { getClient } from "../api/client.ts";
-import type { VMConfig, ContainerConfig, NetworkInterface } from "../api/types.ts";
+import { useEditMode } from "../context/EditModeContext.tsx";
+import type { VMConfig, ContainerConfig, NetworkInterface, ContainerConfigUpdate } from "../api/types.ts";
 
 interface DetailViewProps {
   type: "vm" | "container";
@@ -29,11 +30,30 @@ interface DetailViewProps {
   onStop: () => Promise<void>;
   onReboot: () => Promise<void>;
   onConsole?: (vmid: number, node: string) => void;
+  onUpdate?: (config: Partial<ContainerConfigUpdate>) => Promise<void>;
 }
 
 type Action = "start" | "stop" | "reboot" | "console";
 type PendingConfirm = Action | null;
-type Tab = "summary" | "options";
+type Tab = "summary" | "resources" | "network" | "options";
+
+// Edit mode types
+interface ResourcesEditValues {
+  memory: string;
+  swap: string;
+  cores: string;
+  cpulimit: string;
+  cpuunits: string;
+}
+
+interface OptionsEditValues {
+  hostname: string;
+  onboot: boolean;
+  protection: boolean;
+  startupOrder: string;
+  startupUp: string;
+  startupDown: string;
+}
 
 function parseNetworkInfo(netConfig?: string): { ip?: string; mac?: string; bridge?: string } {
   if (!netConfig) return {};
@@ -100,7 +120,7 @@ function getOsIcon(ostype: string | undefined): string {
   if (os.includes("opensuse") || os.includes("suse")) return "🦎";
   if (os.includes("nixos")) return "❄️";
   if (os.includes("devuan")) return "🔱";
-  return "🐧"; // Generic Linux
+  return "🐧";
 }
 
 export function DetailView({
@@ -111,8 +131,10 @@ export function DetailView({
   onStop,
   onReboot,
   onConsole,
+  onUpdate,
 }: DetailViewProps) {
   const { stdout } = useStdout();
+  const { setEditing } = useEditMode();
   const terminalWidth = stdout?.columns || 80;
 
   const [selectedAction, setSelectedAction] = useState(0);
@@ -125,24 +147,53 @@ export function DetailView({
   const [selectedTab, setSelectedTab] = useState<Tab>("summary");
   const [actionMode, setActionMode] = useState(false);
 
+  // Edit mode state
+  const [editMode, setEditMode] = useState(false);
+  const [selectedField, setSelectedField] = useState(0);
+  const [resourcesEdit, setResourcesEdit] = useState<ResourcesEditValues>({
+    memory: "",
+    swap: "",
+    cores: "",
+    cpulimit: "",
+    cpuunits: "",
+  });
+  const [optionsEdit, setOptionsEdit] = useState<OptionsEditValues>({
+    hostname: "",
+    onboot: false,
+    protection: false,
+    startupOrder: "",
+    startupUp: "",
+    startupDown: "",
+  });
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setEditing(editMode);
+    return () => setEditing(false);
+  }, [editMode, setEditing]);
+
   const isRunning = item.status === "running";
+  const isContainer = type === "container";
 
-  // Available tabs - Options only for containers
-  const tabs: { key: Tab; label: string }[] = type === "container"
+  const tabs: { key: Tab; label: string; editable: boolean }[] = isContainer
     ? [
-        { key: "summary", label: "Summary" },
-        { key: "options", label: "Options" },
+        { key: "summary", label: "Summary", editable: false },
+        { key: "resources", label: "Resources", editable: true },
+        { key: "network", label: "Network", editable: false },
+        { key: "options", label: "Options", editable: true },
       ]
-    : [
-        { key: "summary", label: "Summary" },
-      ];
+    : [{ key: "summary", label: "Summary", editable: false }];
 
-  // Dynamic widths based on terminal size
-  const actionsWidth = 22;
-  const infoWidth = Math.max(40, terminalWidth - actionsWidth - 10); // 10 for gaps/borders
-  const progressBarWidth = Math.max(8, Math.min(15, infoWidth - 50)); // Smaller bars
+  const currentTabInfo = tabs.find((t) => t.key === selectedTab);
+  const isEditable = currentTabInfo?.editable && isContainer && onUpdate;
 
-  // Fetch config and interfaces on mount
+  const isNarrow = terminalWidth < 80;
+  const actionsWidth = isNarrow ? 18 : 22;
+  const infoWidth = Math.max(35, terminalWidth - actionsWidth - 10);
+  const progressBarWidth = Math.max(6, Math.min(12, infoWidth - 45));
+  const labelWidth = isNarrow ? 12 : 16;
+
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -153,7 +204,6 @@ export function DetailView({
         } else {
           const cfg = await client.getContainerConfig(item.node, item.vmid);
           setConfig(cfg);
-          // Fetch live interfaces for containers (to get actual IP)
           if (isRunning) {
             try {
               const ifaces = await client.getContainerInterfaces(item.node, item.vmid);
@@ -172,7 +222,30 @@ export function DetailView({
     fetchData();
   }, [type, item.node, item.vmid, isRunning]);
 
-  // Get live IP from interfaces (prefer eth0, then any interface with an IP)
+  useEffect(() => {
+    if (config && isContainer) {
+      const containerConfig = config as ContainerConfig;
+      const startup = parseStartup(containerConfig.startup);
+
+      setResourcesEdit({
+        memory: String(containerConfig.memory || Math.round(item.maxmem / 1024 / 1024)),
+        swap: String(containerConfig.swap || Math.round((item.maxswap || 0) / 1024 / 1024)),
+        cores: String(containerConfig.cores || item.cpus),
+        cpulimit: String(containerConfig.cpulimit || 0),
+        cpuunits: String(containerConfig.cpuunits || 1024),
+      });
+
+      setOptionsEdit({
+        hostname: containerConfig.hostname || item.name || "",
+        onboot: containerConfig.onboot === 1,
+        protection: containerConfig.protection === 1,
+        startupOrder: startup.order !== undefined ? String(startup.order) : "",
+        startupUp: startup.up !== undefined ? String(startup.up) : "",
+        startupDown: startup.down !== undefined ? String(startup.down) : "",
+      });
+    }
+  }, [config, isContainer, item]);
+
   const liveIp = (() => {
     const eth0 = interfaces.find((i) => i.name === "eth0");
     if (eth0?.inet) return eth0.inet.split("/")[0];
@@ -181,7 +254,6 @@ export function DetailView({
     return null;
   })();
 
-  // Fall back to config IP if no live IP
   const netInfo = parseNetworkInfo(config?.net0);
   const displayIp = liveIp || netInfo.ip;
   const hasConsole = type === "container" && isRunning && onConsole;
@@ -190,13 +262,67 @@ export function DetailView({
     { key: "start", label: "Start", enabled: !isRunning, destructive: false },
     { key: "stop", label: "Stop", enabled: isRunning, destructive: true },
     { key: "reboot", label: "Reboot", enabled: isRunning, destructive: true },
-    { key: "console", label: "Console (SSH)", enabled: !!hasConsole, destructive: false },
+    { key: "console", label: "Console", enabled: !!hasConsole, destructive: false },
   ];
 
   const enabledActions = actions.filter((a) => a.enabled);
 
+  const resourceFields = ["memory", "swap", "cores", "cpulimit", "cpuunits"] as const;
+  const optionFields = ["hostname", "onboot", "protection", "startupOrder", "startupUp", "startupDown"] as const;
+
+  const handleSave = async () => {
+    if (!onUpdate) return;
+
+    setSaving(true);
+    setSaveError(null);
+
+    try {
+      if (selectedTab === "resources") {
+        const updates: Partial<ContainerConfigUpdate> = {};
+        const mem = parseInt(resourcesEdit.memory);
+        const swap = parseInt(resourcesEdit.swap);
+        const cores = parseInt(resourcesEdit.cores);
+        const cpulimit = parseFloat(resourcesEdit.cpulimit);
+        const cpuunits = parseInt(resourcesEdit.cpuunits);
+
+        if (!isNaN(mem) && mem > 0) updates.memory = mem;
+        if (!isNaN(swap) && swap >= 0) updates.swap = swap;
+        if (!isNaN(cores) && cores > 0) updates.cores = cores;
+        if (!isNaN(cpulimit) && cpulimit >= 0) updates.cpulimit = cpulimit;
+        if (!isNaN(cpuunits) && cpuunits >= 0) updates.cpuunits = cpuunits;
+
+        await onUpdate(updates);
+      } else if (selectedTab === "options") {
+        const updates: Partial<ContainerConfigUpdate> = {};
+
+        if (optionsEdit.hostname) updates.hostname = optionsEdit.hostname;
+        updates.onboot = optionsEdit.onboot ? 1 : 0;
+        updates.protection = optionsEdit.protection ? 1 : 0;
+
+        const startupParts: string[] = [];
+        if (optionsEdit.startupOrder) startupParts.push(`order=${optionsEdit.startupOrder}`);
+        if (optionsEdit.startupUp) startupParts.push(`up=${optionsEdit.startupUp}`);
+        if (optionsEdit.startupDown) startupParts.push(`down=${optionsEdit.startupDown}`);
+        if (startupParts.length > 0) {
+          updates.startup = startupParts.join(",");
+        }
+
+        await onUpdate(updates);
+      }
+
+      setEditMode(false);
+      const client = getClient();
+      const cfg = await client.getContainerConfig(item.node, item.vmid);
+      setConfig(cfg);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   useInput(async (input, key) => {
-    if (loading) return;
+    if (loading || saving) return;
 
     // Handle confirmation
     if (pendingConfirm) {
@@ -218,7 +344,59 @@ export function DetailView({
       return;
     }
 
-    // Exit action mode or go back
+    // Edit mode handling
+    if (editMode) {
+      const fields = selectedTab === "resources" ? resourceFields : optionFields;
+      const fieldCount = fields.length;
+
+      if (key.escape) {
+        setEditMode(false);
+        setSaveError(null);
+        setSelectedField(0);
+        return;
+      }
+
+      if (key.return && !key.shift) {
+        await handleSave();
+        return;
+      }
+
+      if (input === "j" || key.downArrow || (key.tab && !key.shift)) {
+        setSelectedField((prev) => (prev + 1) % fieldCount);
+        return;
+      }
+      if (input === "k" || key.upArrow || (key.shift && key.tab)) {
+        setSelectedField((prev) => (prev - 1 + fieldCount) % fieldCount);
+        return;
+      }
+
+      const currentField = fields[selectedField];
+      if (!currentField) return;
+
+      if (selectedTab === "resources") {
+        const field = currentField as keyof ResourcesEditValues;
+        if (key.backspace || key.delete) {
+          setResourcesEdit((prev) => ({ ...prev, [field]: prev[field].slice(0, -1) }));
+        } else if (/^[0-9.]$/.test(input)) {
+          setResourcesEdit((prev) => ({ ...prev, [field]: prev[field] + input }));
+        }
+      } else if (selectedTab === "options") {
+        const field = currentField as keyof OptionsEditValues;
+        if (field === "onboot" || field === "protection") {
+          if (input === " ") {
+            setOptionsEdit((prev) => ({ ...prev, [field]: !prev[field] }));
+          }
+        } else {
+          if (key.backspace || key.delete) {
+            setOptionsEdit((prev) => ({ ...prev, [field]: String(prev[field]).slice(0, -1) }));
+          } else if (input.length === 1 && !key.ctrl && !key.meta) {
+            setOptionsEdit((prev) => ({ ...prev, [field]: String(prev[field]) + input }));
+          }
+        }
+      }
+      return;
+    }
+
     if (key.escape) {
       if (actionMode) {
         setActionMode(false);
@@ -233,13 +411,18 @@ export function DetailView({
       return;
     }
 
-    // Toggle action mode with 'a'
+    if (input === "e" && isEditable && !actionMode) {
+      setEditMode(true);
+      setSelectedField(0);
+      setSaveError(null);
+      return;
+    }
+
     if (input === "a") {
       setActionMode(!actionMode);
       return;
     }
 
-    // Action mode: navigate and execute actions
     if (actionMode) {
       if (input === "j" || key.downArrow) {
         setSelectedAction((prev) => (prev + 1) % enabledActions.length);
@@ -249,13 +432,11 @@ export function DetailView({
         const action = enabledActions[selectedAction];
         if (!action) return;
 
-        // Require confirmation for destructive actions
         if (action.destructive) {
           setPendingConfirm(action.key);
           return;
         }
 
-        // Handle console action
         if (action.key === "console" && onConsole) {
           onConsole(item.vmid, item.node);
           return;
@@ -274,7 +455,6 @@ export function DetailView({
       return;
     }
 
-    // Tab navigation with h/l or left/right arrows (only when not in action mode)
     if (input === "h" || key.leftArrow) {
       const currentIndex = tabs.findIndex((t) => t.key === selectedTab);
       const newIndex = (currentIndex - 1 + tabs.length) % tabs.length;
@@ -290,14 +470,49 @@ export function DetailView({
     }
   });
 
-  const cpuPercent = item.cpus > 0 ? (item.cpu * 100) : 0;
+  const cpuPercent = item.cpus > 0 ? item.cpu * 100 : 0;
   const memPercent = item.maxmem > 0 ? (item.mem / item.maxmem) * 100 : 0;
   const swapPercent = item.maxswap && item.maxswap > 0 ? ((item.swap || 0) / item.maxswap) * 100 : 0;
   const diskPercent = item.maxdisk > 0 ? (item.disk / item.maxdisk) * 100 : 0;
 
   const label = type === "vm" ? "Virtual Machine" : "Container";
 
-  // Render tab content based on selected tab
+  const renderEditField = (
+    fieldLabel: string,
+    value: string | boolean,
+    isSelected: boolean,
+    isBoolean: boolean = false,
+    suffix: string = ""
+  ) => {
+    const fieldLabelWidth = Math.min(labelWidth, 14);
+
+    return (
+      <Box>
+        <Box width={fieldLabelWidth}>
+          <Text dimColor>{fieldLabel}:</Text>
+        </Box>
+        <Box
+          borderStyle={isSelected ? "single" : undefined}
+          borderColor={isSelected ? "cyan" : undefined}
+          paddingX={isSelected ? 1 : 0}
+        >
+          {isBoolean ? (
+            <Text color={isSelected ? "cyan" : undefined}>
+              {value ? "[x]" : "[ ]"} {value ? "Yes" : "No"}
+              {isSelected && <Text dimColor> (space to toggle)</Text>}
+            </Text>
+          ) : (
+            <Text color={isSelected ? "cyan" : undefined}>
+              {value || <Text dimColor>(empty)</Text>}
+              {suffix && <Text dimColor> {suffix}</Text>}
+              {isSelected && <Text dimColor inverse> </Text>}
+            </Text>
+          )}
+        </Box>
+      </Box>
+    );
+  };
+
   const renderTabContent = () => {
     if (configLoading) {
       return (
@@ -311,178 +526,491 @@ export function DetailView({
       case "summary":
         return (
           <>
-            {/* Basic Info */}
             <Box marginBottom={1} flexDirection="column">
-              <Text bold dimColor>General</Text>
+              <Text bold dimColor>
+                General
+              </Text>
               <Box>
-                <Box width={16}><Text dimColor>ID:</Text></Box>
+                <Box width={labelWidth}>
+                  <Text dimColor>ID:</Text>
+                </Box>
                 <Text>{item.vmid}</Text>
               </Box>
               <Box>
-                <Box width={16}><Text dimColor>Node:</Text></Box>
+                <Box width={labelWidth}>
+                  <Text dimColor>Node:</Text>
+                </Box>
                 <Text>{item.node}</Text>
               </Box>
               <Box>
-                <Box width={16}><Text dimColor>Status:</Text></Box>
+                <Box width={labelWidth}>
+                  <Text dimColor>Status:</Text>
+                </Box>
                 <Text>{item.status}</Text>
               </Box>
               {isRunning && (
                 <Box>
-                  <Box width={16}><Text dimColor>Uptime:</Text></Box>
+                  <Box width={labelWidth}>
+                    <Text dimColor>Uptime:</Text>
+                  </Box>
                   <Text>{formatUptime(item.uptime)}</Text>
                 </Box>
               )}
               {config?.tags && (
                 <Box>
-                  <Box width={16}><Text dimColor>Tags:</Text></Box>
+                  <Box width={labelWidth}>
+                    <Text dimColor>Tags:</Text>
+                  </Box>
                   <Text color="cyan">{config.tags}</Text>
-                </Box>
-              )}
-              {config?.onboot !== undefined && (
-                <Box>
-                  <Box width={16}><Text dimColor>Start on boot:</Text></Box>
-                  <Text>{config.onboot ? "Yes" : "No"}</Text>
                 </Box>
               )}
             </Box>
 
-            {/* Network Info */}
             {(displayIp || netInfo.mac || netInfo.bridge) && (
               <Box marginBottom={1} flexDirection="column">
-                <Text bold dimColor>Network</Text>
+                <Text bold dimColor>
+                  Network
+                </Text>
                 {displayIp && (
                   <Box>
-                    <Box width={16}><Text dimColor>IP Address:</Text></Box>
+                    <Box width={labelWidth}>
+                      <Text dimColor>IP Address:</Text>
+                    </Box>
                     <Text>{displayIp}</Text>
                     {liveIp && <Text color="green"> (live)</Text>}
                   </Box>
                 )}
                 {netInfo.mac && (
                   <Box>
-                    <Box width={16}><Text dimColor>MAC:</Text></Box>
+                    <Box width={labelWidth}>
+                      <Text dimColor>MAC:</Text>
+                    </Box>
                     <Text>{netInfo.mac}</Text>
-                  </Box>
-                )}
-                {netInfo.bridge && (
-                  <Box>
-                    <Box width={16}><Text dimColor>Bridge:</Text></Box>
-                    <Text>{netInfo.bridge}</Text>
                   </Box>
                 )}
               </Box>
             )}
 
-            {/* Resources */}
             <Box marginBottom={1} flexDirection="column">
-              <Text bold dimColor>Resources</Text>
+              <Text bold dimColor>
+                Resources
+              </Text>
               <Box>
-                <Box width={16}><Text dimColor>CPU:</Text></Box>
-                <Box width={progressBarWidth + 2}><ProgressBar percent={cpuPercent} width={progressBarWidth} showPercent={false} /></Box>
-                <Text> {cpuPercent.toFixed(0)}% ({item.cpus} cores)</Text>
+                <Box width={labelWidth}>
+                  <Text dimColor>CPU:</Text>
+                </Box>
+                <Box width={progressBarWidth + 2}>
+                  <ProgressBar percent={cpuPercent} width={progressBarWidth} showPercent={false} />
+                </Box>
+                <Text>
+                  {" "}
+                  {cpuPercent.toFixed(0)}% ({item.cpus} cores)
+                </Text>
               </Box>
               <Box>
-                <Box width={16}><Text dimColor>Memory:</Text></Box>
-                <Box width={progressBarWidth + 2}><ProgressBar percent={memPercent} width={progressBarWidth} showPercent={false} /></Box>
-                <Text> {formatBytes(item.mem)} / {formatBytes(item.maxmem)}</Text>
+                <Box width={labelWidth}>
+                  <Text dimColor>Memory:</Text>
+                </Box>
+                <Box width={progressBarWidth + 2}>
+                  <ProgressBar percent={memPercent} width={progressBarWidth} showPercent={false} />
+                </Box>
+                <Text>
+                  {" "}
+                  {formatBytes(item.mem)} / {formatBytes(item.maxmem)}
+                </Text>
               </Box>
               {item.maxswap !== undefined && item.maxswap > 0 && (
                 <Box>
-                  <Box width={16}><Text dimColor>Swap:</Text></Box>
-                  <Box width={progressBarWidth + 2}><ProgressBar percent={swapPercent} width={progressBarWidth} showPercent={false} /></Box>
-                  <Text> {formatBytes(item.swap || 0)} / {formatBytes(item.maxswap)}</Text>
+                  <Box width={labelWidth}>
+                    <Text dimColor>Swap:</Text>
+                  </Box>
+                  <Box width={progressBarWidth + 2}>
+                    <ProgressBar percent={swapPercent} width={progressBarWidth} showPercent={false} />
+                  </Box>
+                  <Text>
+                    {" "}
+                    {formatBytes(item.swap || 0)} / {formatBytes(item.maxswap)}
+                  </Text>
                 </Box>
               )}
               <Box>
-                <Box width={16}><Text dimColor>Disk:</Text></Box>
-                <Box width={progressBarWidth + 2}><ProgressBar percent={diskPercent} width={progressBarWidth} showPercent={false} /></Box>
-                <Text> {formatBytes(item.disk)} / {formatBytes(item.maxdisk)}</Text>
+                <Box width={labelWidth}>
+                  <Text dimColor>Disk:</Text>
+                </Box>
+                <Box width={progressBarWidth + 2}>
+                  <ProgressBar percent={diskPercent} width={progressBarWidth} showPercent={false} />
+                </Box>
+                <Text>
+                  {" "}
+                  {formatBytes(item.disk)} / {formatBytes(item.maxdisk)}
+                </Text>
               </Box>
             </Box>
 
-            {/* Notes/Description */}
             {config?.description && (
               <Box flexDirection="column">
-                <Text bold dimColor>Notes</Text>
+                <Text bold dimColor>
+                  Notes
+                </Text>
                 <Text>{config.description}</Text>
               </Box>
             )}
           </>
         );
 
-      case "options":
-        if (type !== "container" || !config) return null;
+      case "resources":
+        if (!isContainer || !config) return null;
         const containerConfig = config as ContainerConfig;
-        const features = parseFeatures(containerConfig.features);
-        const startup = parseStartup(containerConfig.startup);
+
+        if (editMode) {
+          return (
+            <Box flexDirection="column">
+              <Box marginBottom={1}>
+                <Text bold color="cyan">
+                  Edit Resources
+                </Text>
+                <Text dimColor> (j/k navigate, Enter save, Esc cancel)</Text>
+              </Box>
+
+              {saveError && (
+                <Box marginBottom={1}>
+                  <Text color="red">{saveError}</Text>
+                </Box>
+              )}
+
+              {saving ? (
+                <Spinner label="Saving..." />
+              ) : (
+                <Box flexDirection="column">
+                  {renderEditField("Memory", resourcesEdit.memory, selectedField === 0, false, "MB")}
+                  {renderEditField("Swap", resourcesEdit.swap, selectedField === 1, false, "MB")}
+                  {renderEditField("CPU Cores", resourcesEdit.cores, selectedField === 2)}
+                  {renderEditField("CPU Limit", resourcesEdit.cpulimit, selectedField === 3, false, "(0=unlimited)")}
+                  {renderEditField("CPU Units", resourcesEdit.cpuunits, selectedField === 4, false, "(1024 default)")}
+                </Box>
+              )}
+            </Box>
+          );
+        }
 
         return (
           <Box flexDirection="column">
             <Box marginBottom={1} flexDirection="column">
-              <Text bold dimColor>Container Options</Text>
+              <Text bold dimColor>
+                CPU
+              </Text>
               <Box>
-                <Box width={18}><Text dimColor>OS Type:</Text></Box>
-                <Text>{getOsIcon(containerConfig.ostype)} {containerConfig.ostype || "—"}</Text>
+                <Box width={labelWidth}>
+                  <Text dimColor>Cores:</Text>
+                </Box>
+                <Text>{containerConfig.cores || item.cpus}</Text>
               </Box>
               <Box>
-                <Box width={18}><Text dimColor>Architecture:</Text></Box>
-                <Text>{containerConfig.arch || "amd64"}</Text>
+                <Box width={labelWidth}>
+                  <Text dimColor>Limit:</Text>
+                </Box>
+                <Text>{containerConfig.cpulimit || "unlimited"}</Text>
               </Box>
               <Box>
-                <Box width={18}><Text dimColor>Unprivileged:</Text></Box>
-                <Text color={containerConfig.unprivileged ? "green" : "yellow"}>
-                  {containerConfig.unprivileged ? "Yes" : "No"}
-                </Text>
+                <Box width={labelWidth}>
+                  <Text dimColor>Units:</Text>
+                </Box>
+                <Text>{containerConfig.cpuunits || 1024}</Text>
               </Box>
               <Box>
-                <Box width={18}><Text dimColor>Protection:</Text></Box>
-                <Text color={containerConfig.protection ? "green" : undefined}>
-                  {containerConfig.protection ? "Enabled" : "Disabled"}
-                </Text>
-              </Box>
-              <Box>
-                <Box width={18}><Text dimColor>Console Mode:</Text></Box>
-                <Text>{containerConfig.cmode || "tty"}</Text>
+                <Box width={labelWidth}>
+                  <Text dimColor>Usage:</Text>
+                </Box>
+                <Box width={progressBarWidth + 2}>
+                  <ProgressBar percent={cpuPercent} width={progressBarWidth} showPercent={false} />
+                </Box>
+                <Text> {cpuPercent.toFixed(1)}%</Text>
               </Box>
             </Box>
 
             <Box marginBottom={1} flexDirection="column">
-              <Text bold dimColor>Startup</Text>
+              <Text bold dimColor>
+                Memory
+              </Text>
               <Box>
-                <Box width={18}><Text dimColor>Start on boot:</Text></Box>
-                <Text>{containerConfig.onboot ? "Yes" : "No"}</Text>
+                <Box width={labelWidth}>
+                  <Text dimColor>Allocated:</Text>
+                </Box>
+                <Text>{containerConfig.memory || Math.round(item.maxmem / 1024 / 1024)} MB</Text>
               </Box>
               <Box>
-                <Box width={18}><Text dimColor>Start order:</Text></Box>
-                <Text>{startup.order !== undefined ? startup.order : "—"}</Text>
-              </Box>
-              <Box>
-                <Box width={18}><Text dimColor>Startup delay:</Text></Box>
-                <Text>{startup.up !== undefined ? `${startup.up}s` : "—"}</Text>
-              </Box>
-              <Box>
-                <Box width={18}><Text dimColor>Shutdown delay:</Text></Box>
-                <Text>{startup.down !== undefined ? `${startup.down}s` : "—"}</Text>
+                <Box width={labelWidth}>
+                  <Text dimColor>Usage:</Text>
+                </Box>
+                <Box width={progressBarWidth + 2}>
+                  <ProgressBar percent={memPercent} width={progressBarWidth} showPercent={false} />
+                </Box>
+                <Text>
+                  {" "}
+                  {formatBytes(item.mem)} / {formatBytes(item.maxmem)}
+                </Text>
               </Box>
             </Box>
 
             <Box flexDirection="column">
-              <Text bold dimColor>Features</Text>
-              {features.length > 0 ? (
-                features.map((f) => (
-                  <Box key={f}>
-                    <Box width={18}><Text dimColor>{f}:</Text></Box>
-                    <Text color="green">Enabled</Text>
+              <Text bold dimColor>
+                Swap
+              </Text>
+              <Box>
+                <Box width={labelWidth}>
+                  <Text dimColor>Allocated:</Text>
+                </Box>
+                <Text>{containerConfig.swap || Math.round((item.maxswap || 0) / 1024 / 1024)} MB</Text>
+              </Box>
+              {item.maxswap !== undefined && item.maxswap > 0 && (
+                <Box>
+                  <Box width={labelWidth}>
+                    <Text dimColor>Usage:</Text>
                   </Box>
-                ))
-              ) : (
-                <Text dimColor>No special features enabled</Text>
+                  <Box width={progressBarWidth + 2}>
+                    <ProgressBar percent={swapPercent} width={progressBarWidth} showPercent={false} />
+                  </Box>
+                  <Text>
+                    {" "}
+                    {formatBytes(item.swap || 0)} / {formatBytes(item.maxswap)}
+                  </Text>
+                </Box>
               )}
             </Box>
 
-            {containerConfig.lock && (
+            {isEditable && (
+              <Box marginTop={1}>
+                <Text dimColor>Press 'e' to edit</Text>
+              </Box>
+            )}
+          </Box>
+        );
+
+      case "network":
+        if (!isContainer) return null;
+
+        // Parse all network interfaces from config
+        const netInterfaces: { name: string; config: string }[] = [];
+        if (config) {
+          const containerCfg = config as ContainerConfig;
+          if (containerCfg.net0) netInterfaces.push({ name: "net0", config: containerCfg.net0 });
+          if (containerCfg.net1) netInterfaces.push({ name: "net1", config: containerCfg.net1 });
+          if (containerCfg.net2) netInterfaces.push({ name: "net2", config: containerCfg.net2 });
+          if (containerCfg.net3) netInterfaces.push({ name: "net3", config: containerCfg.net3 });
+        }
+
+        return (
+          <Box flexDirection="column">
+            {netInterfaces.length === 0 ? (
+              <Text dimColor>No network interfaces configured</Text>
+            ) : (
+              netInterfaces.map((iface) => {
+                const info = parseNetworkInfo(iface.config);
+                const liveData = interfaces.find(
+                  (i) => i.name === "eth" + iface.name.slice(-1) || i.name === iface.name
+                );
+
+                return (
+                  <Box key={iface.name} marginBottom={1} flexDirection="column">
+                    <Text bold dimColor>
+                      {iface.name.toUpperCase()}
+                    </Text>
+                    {(liveData?.inet || info.ip) && (
+                      <Box>
+                        <Box width={labelWidth}>
+                          <Text dimColor>IP Address:</Text>
+                        </Box>
+                        <Text>{liveData?.inet?.split("/")[0] || info.ip}</Text>
+                        {liveData?.inet && <Text color="green"> (live)</Text>}
+                      </Box>
+                    )}
+                    {info.mac && (
+                      <Box>
+                        <Box width={labelWidth}>
+                          <Text dimColor>MAC:</Text>
+                        </Box>
+                        <Text>{info.mac}</Text>
+                      </Box>
+                    )}
+                    {info.bridge && (
+                      <Box>
+                        <Box width={labelWidth}>
+                          <Text dimColor>Bridge:</Text>
+                        </Box>
+                        <Text>{info.bridge}</Text>
+                      </Box>
+                    )}
+                  </Box>
+                );
+              })
+            )}
+
+            {interfaces.length > 0 && (
               <Box marginTop={1} flexDirection="column">
-                <Text bold dimColor>Lock Status</Text>
-                <Text color="red">Locked: {containerConfig.lock}</Text>
+                <Text bold dimColor>
+                  Live Interfaces
+                </Text>
+                {interfaces
+                  .filter((i) => i.name !== "lo")
+                  .map((iface) => (
+                    <Box key={iface.name}>
+                      <Box width={labelWidth}>
+                        <Text dimColor>{iface.name}:</Text>
+                      </Box>
+                      <Text>{iface.inet?.split("/")[0] || "—"}</Text>
+                    </Box>
+                  ))}
+              </Box>
+            )}
+          </Box>
+        );
+
+      case "options":
+        if (!isContainer || !config) return null;
+        const optConfig = config as ContainerConfig;
+        const features = parseFeatures(optConfig.features);
+        const startup = parseStartup(optConfig.startup);
+
+        if (editMode) {
+          return (
+            <Box flexDirection="column">
+              <Box marginBottom={1}>
+                <Text bold color="cyan">
+                  Edit Options
+                </Text>
+                <Text dimColor> (j/k navigate, Enter save, Esc cancel)</Text>
+              </Box>
+
+              {saveError && (
+                <Box marginBottom={1}>
+                  <Text color="red">{saveError}</Text>
+                </Box>
+              )}
+
+              {saving ? (
+                <Spinner label="Saving..." />
+              ) : (
+                <Box flexDirection="column">
+                  {renderEditField("Hostname", optionsEdit.hostname, selectedField === 0)}
+                  {renderEditField("Start on boot", optionsEdit.onboot, selectedField === 1, true)}
+                  {renderEditField("Protection", optionsEdit.protection, selectedField === 2, true)}
+                  {renderEditField("Start order", optionsEdit.startupOrder, selectedField === 3)}
+                  {renderEditField("Start delay", optionsEdit.startupUp, selectedField === 4, false, "seconds")}
+                  {renderEditField("Stop delay", optionsEdit.startupDown, selectedField === 5, false, "seconds")}
+                </Box>
+              )}
+            </Box>
+          );
+        }
+
+        return (
+          <Box flexDirection="column">
+            <Box marginBottom={1} flexDirection="column">
+              <Text bold dimColor>
+                General
+              </Text>
+              <Box>
+                <Box width={labelWidth}>
+                  <Text dimColor>Hostname:</Text>
+                </Box>
+                <Text>{optConfig.hostname || item.name || "—"}</Text>
+              </Box>
+              <Box>
+                <Box width={labelWidth}>
+                  <Text dimColor>OS Type:</Text>
+                </Box>
+                <Text>
+                  {getOsIcon(optConfig.ostype)} {optConfig.ostype || "—"}
+                </Text>
+              </Box>
+              <Box>
+                <Box width={labelWidth}>
+                  <Text dimColor>Architecture:</Text>
+                </Box>
+                <Text>{optConfig.arch || "amd64"}</Text>
+              </Box>
+            </Box>
+
+            <Box marginBottom={1} flexDirection="column">
+              <Text bold dimColor>
+                Security
+              </Text>
+              <Box>
+                <Box width={labelWidth}>
+                  <Text dimColor>Unprivileged:</Text>
+                </Box>
+                <Text color={optConfig.unprivileged ? "green" : "yellow"}>
+                  {optConfig.unprivileged ? "Yes" : "No"}
+                </Text>
+              </Box>
+              <Box>
+                <Box width={labelWidth}>
+                  <Text dimColor>Protection:</Text>
+                </Box>
+                <Text color={optConfig.protection ? "green" : undefined}>
+                  {optConfig.protection ? "Enabled" : "Disabled"}
+                </Text>
+              </Box>
+            </Box>
+
+            <Box marginBottom={1} flexDirection="column">
+              <Text bold dimColor>
+                Startup
+              </Text>
+              <Box>
+                <Box width={labelWidth}>
+                  <Text dimColor>Start on boot:</Text>
+                </Box>
+                <Text>{optConfig.onboot ? "Yes" : "No"}</Text>
+              </Box>
+              <Box>
+                <Box width={labelWidth}>
+                  <Text dimColor>Start order:</Text>
+                </Box>
+                <Text>{startup.order !== undefined ? startup.order : "—"}</Text>
+              </Box>
+              <Box>
+                <Box width={labelWidth}>
+                  <Text dimColor>Start delay:</Text>
+                </Box>
+                <Text>{startup.up !== undefined ? `${startup.up}s` : "—"}</Text>
+              </Box>
+              <Box>
+                <Box width={labelWidth}>
+                  <Text dimColor>Stop delay:</Text>
+                </Box>
+                <Text>{startup.down !== undefined ? `${startup.down}s` : "—"}</Text>
+              </Box>
+            </Box>
+
+            {features.length > 0 && (
+              <Box flexDirection="column">
+                <Text bold dimColor>
+                  Features
+                </Text>
+                {features.map((f) => (
+                  <Box key={f}>
+                    <Box width={labelWidth}>
+                      <Text dimColor>{f}:</Text>
+                    </Box>
+                    <Text color="green">Enabled</Text>
+                  </Box>
+                ))}
+              </Box>
+            )}
+
+            {optConfig.lock && (
+              <Box marginTop={1} flexDirection="column">
+                <Text bold dimColor>
+                  Lock Status
+                </Text>
+                <Text color="red">Locked: {optConfig.lock}</Text>
+              </Box>
+            )}
+
+            {isEditable && (
+              <Box marginTop={1}>
+                <Text dimColor>Press 'e' to edit</Text>
               </Box>
             )}
           </Box>
@@ -493,21 +1021,29 @@ export function DetailView({
     }
   };
 
+  const getHelpText = () => {
+    if (editMode) {
+      return " (j/k navigate, Enter save, Esc cancel)";
+    }
+    if (actionMode) {
+      return " (Esc exit actions, j/k navigate, Enter select)";
+    }
+    const parts = ["q back"];
+    if (tabs.length > 1) parts.push("h/l tabs");
+    parts.push("a actions");
+    if (isEditable) parts.push("e edit");
+    return ` (${parts.join(", ")})`;
+  };
+
   return (
     <Box flexDirection="column">
       <Box marginBottom={1}>
-        <Text bold color="blue">{label} Details</Text>
-        <Text dimColor>
-          {actionMode
-            ? " (Esc to exit actions, j/k to navigate, Enter to select)"
-            : tabs.length > 1
-              ? " (q to go back, h/l to switch tabs, a for actions)"
-              : " (q to go back, a for actions)"
-          }
+        <Text bold color="blue">
+          {label} Details
         </Text>
+        <Text dimColor>{getHelpText()}</Text>
       </Box>
 
-      {/* Tab bar */}
       {tabs.length > 1 && (
         <Box marginBottom={1}>
           {tabs.map((tab) => (
@@ -519,38 +1055,50 @@ export function DetailView({
               >
                 {selectedTab === tab.key ? `[${tab.label}]` : ` ${tab.label} `}
               </Text>
+              {tab.editable && selectedTab === tab.key && !editMode && (
+                <Text dimColor> *</Text>
+              )}
             </Box>
           ))}
         </Box>
       )}
 
-      {/* Confirmation dialog */}
       {pendingConfirm && (
         <Box marginBottom={1} paddingX={1} borderStyle="round" borderColor="yellow">
           <Text color="yellow">
             {pendingConfirm === "stop" ? "Stop" : "Reboot"} {type} "{item.name || item.vmid}"?
-            <Text dimColor> (y/Enter to confirm, n/Esc to cancel)</Text>
+            <Text dimColor> (y/Enter confirm, n/Esc cancel)</Text>
           </Text>
         </Box>
       )}
 
       <Box flexDirection="row" gap={2}>
-        {/* Left: Info */}
-        <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={2} paddingY={1} width={infoWidth}>
+        <Box
+          flexDirection="column"
+          borderStyle="round"
+          borderColor={editMode ? "cyan" : "gray"}
+          paddingX={2}
+          paddingY={1}
+          width={infoWidth}
+        >
           <Box marginBottom={1}>
             <StatusBadge status={item.status} />
             <Text> </Text>
-            {type === "container" && config && (
-              <Text>{getOsIcon((config as ContainerConfig).ostype)} </Text>
-            )}
+            {isContainer && config && <Text>{getOsIcon((config as ContainerConfig).ostype)} </Text>}
             <Text bold>{item.name || `${type === "vm" ? "VM" : "CT"} ${item.vmid}`}</Text>
           </Box>
 
           {renderTabContent()}
         </Box>
 
-        {/* Right: Actions */}
-        <Box flexDirection="column" borderStyle="round" borderColor={actionMode ? "cyan" : "gray"} paddingX={2} paddingY={1} width={actionsWidth}>
+        <Box
+          flexDirection="column"
+          borderStyle="round"
+          borderColor={actionMode ? "cyan" : "gray"}
+          paddingX={2}
+          paddingY={1}
+          width={actionsWidth}
+        >
           <Box marginBottom={1}>
             <Text bold color={actionMode ? "cyan" : undefined} dimColor={!actionMode}>
               Actions {actionMode && "▸"}
@@ -564,18 +1112,17 @@ export function DetailView({
                 color={actionMode && selectedAction === index ? (action.destructive ? "red" : "cyan") : undefined}
                 dimColor={!actionMode}
               >
-                {actionMode && selectedAction === index ? "▸" : " "}{action.label}{" "}
+                {actionMode && selectedAction === index ? "▸" : " "}
+                {action.label}{" "}
               </Text>
             </Box>
           ))}
 
-          {enabledActions.length === 0 && (
-            <Text dimColor>No actions available</Text>
-          )}
+          {enabledActions.length === 0 && <Text dimColor>No actions</Text>}
 
           {!actionMode && enabledActions.length > 0 && (
             <Box marginTop={1}>
-              <Text dimColor>Press 'a' to select</Text>
+              <Text dimColor>Press 'a'</Text>
             </Box>
           )}
 
@@ -587,7 +1134,7 @@ export function DetailView({
 
           {loading && (
             <Box marginTop={1}>
-              <Spinner label="Processing..." />
+              <Spinner label="..." />
             </Box>
           )}
         </Box>

@@ -12,10 +12,17 @@ export function formatPercent(value: number, decimals = 1): string {
   return `${(value * 100).toFixed(decimals)}%`;
 }
 
-export function formatUptime(seconds: number): string {
+export function formatUptime(seconds: number, compact = false): string {
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
+
+  if (compact) {
+    // Compact format for narrow columns: "5d" or "3h" or "12m"
+    if (days > 0) return `${days}d`;
+    if (hours > 0) return `${hours}h`;
+    return `${minutes}m`;
+  }
 
   const parts: string[] = [];
   if (days > 0) parts.push(`${days}d`);

@@ -2,6 +2,7 @@
 import React from "react";
 import { render, Box, Text } from "ink";
 import { App } from "./app.tsx";
+import { EditModeProvider } from "./context/EditModeContext.tsx";
 import { loadConfig, saveConfig, getConfigPath, type ProxmuxConfig } from "./config/index.ts";
 import { initClient } from "./api/client.ts";
 
@@ -92,7 +93,11 @@ Or set environment variables:
   initClient(config);
 
   // Render the app
-  const { waitUntilExit } = render(<App config={config} />);
+  const { waitUntilExit } = render(
+    <EditModeProvider>
+      <App config={config} />
+    </EditModeProvider>
+  );
 
   await waitUntilExit();
 })();

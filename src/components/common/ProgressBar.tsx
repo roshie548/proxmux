@@ -12,13 +12,16 @@ export function ProgressBar({
   width = 20,
   showPercent = true,
 }: ProgressBarProps) {
-  const filled = Math.round((percent / 100) * width);
-  const empty = width - filled;
+  // Ensure percent is valid and width is at least 1
+  const safePercent = Math.max(0, Math.min(100, percent || 0));
+  const safeWidth = Math.max(1, width);
+  const filled = Math.max(0, Math.round((safePercent / 100) * safeWidth));
+  const empty = Math.max(0, safeWidth - filled);
 
   let color: string;
-  if (percent >= 90) {
+  if (safePercent >= 90) {
     color = "red";
-  } else if (percent >= 70) {
+  } else if (safePercent >= 70) {
     color = "yellow";
   } else {
     color = "green";

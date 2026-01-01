@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { getClient } from "../api/client.ts";
-import type { Node, VM, Container, Storage } from "../api/types.ts";
+import type { Node, VM, Container, Storage, ContainerConfigUpdate } from "../api/types.ts";
 
 export function useNodes() {
   const [nodes, setNodes] = useState<Node[]>([]);
@@ -104,7 +104,16 @@ export function useContainers() {
     await refresh();
   }, [refresh]);
 
-  return { containers, loading, error, refresh, startContainer, stopContainer, rebootContainer };
+  const updateContainer = useCallback(async (
+    node: string,
+    vmid: number,
+    config: Partial<ContainerConfigUpdate>
+  ) => {
+    await getClient().updateContainerConfig(node, vmid, config);
+    await refresh();
+  }, [refresh]);
+
+  return { containers, loading, error, refresh, startContainer, stopContainer, rebootContainer, updateContainer };
 }
 
 export function useStorage() {

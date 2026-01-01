@@ -8,6 +8,7 @@ import { Containers } from "./views/Containers.tsx";
 import { Storage } from "./views/Storage.tsx";
 import type { ProxmuxConfig } from "./config/index.ts";
 import { getClient } from "./api/client.ts";
+import { useEditMode } from "./context/EditModeContext.tsx";
 
 interface AppProps {
   config: ProxmuxConfig;
@@ -18,6 +19,7 @@ const views: View[] = ["dashboard", "vms", "containers", "storage"];
 export function App({ config }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
+  const { isEditing } = useEditMode();
   const [currentView, setCurrentView] = useState<View>("dashboard");
   const [connected, setConnected] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(stdout?.rows || 24);
@@ -43,6 +45,9 @@ export function App({ config }: AppProps) {
 
   // Global keyboard shortcuts (handles view switching and quit)
   useInput((input, key) => {
+    // Skip global shortcuts when in edit mode
+    if (isEditing) return;
+
     // View switching with number keys
     const num = parseInt(input);
     if (num >= 1 && num <= views.length) {

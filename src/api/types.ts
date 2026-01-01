@@ -82,6 +82,25 @@ export interface ContainerConfig {
   template?: number;
 }
 
+// Writable subset of ContainerConfig for updates
+export interface ContainerConfigUpdate {
+  // Resources
+  memory?: number;      // MB
+  swap?: number;        // MB
+  cores?: number;
+  cpulimit?: number;    // 0-128 (0 = unlimited)
+  cpuunits?: number;    // 0-500000
+
+  // General
+  hostname?: string;
+  description?: string;
+
+  // Options
+  onboot?: number;      // 0 or 1
+  protection?: number;  // 0 or 1
+  startup?: string;     // order=N,up=N,down=N
+}
+
 // Container (LXC) types
 export interface Container {
   vmid: number;

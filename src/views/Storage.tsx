@@ -1,12 +1,27 @@
 import React from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text, useInput, useStdout } from "ink";
 import { useStorage } from "../hooks/useProxmox.ts";
 import { useKeyboardNavigation } from "../hooks/useKeyboard.ts";
 import { Spinner } from "../components/common/Spinner.tsx";
 import { ProgressBar } from "../components/common/ProgressBar.tsx";
-import { formatBytes } from "../utils/format.ts";
+import { formatBytes, truncate } from "../utils/format.ts";
 
 export function Storage() {
+  const { stdout } = useStdout();
+  const terminalWidth = stdout?.columns || 80;
+  const contentWidth = Math.max(40, terminalWidth - 16);
+
+  // Responsive column widths
+  const isNarrow = contentWidth < 55;
+  const isWide = contentWidth >= 80;
+  const cols = {
+    status: 2,
+    name: isNarrow ? 10 : 14,
+    type: isNarrow ? 6 : 8,
+    content: isNarrow ? 0 : isWide ? 16 : 12,
+    usage: isNarrow ? 12 : isWide ? 24 : 18,
+  };
+
   const { storage, loading, error, refresh } = useStorage();
 
   const { selectedIndex } = useKeyboardNavigation({
@@ -39,59 +54,52 @@ export function Storage() {
   return (
     <Box flexDirection="column">
       <Box marginBottom={1}>
-        <Text bold color="blue">
-          Storage
-        </Text>
+        <Text bold color="blue">Storage</Text>
         <Text dimColor> ({storage.length})</Text>
         {loading && <Text dimColor> (refreshing...)</Text>}
       </Box>
 
-      {/* Header */}
       <Box>
-        <Box width={4}>
-          <Text bold dimColor>ST</Text>
-        </Box>
-        <Box width={16}>
-          <Text bold dimColor>NAME</Text>
-        </Box>
-        <Box width={12}>
-          <Text bold dimColor>TYPE</Text>
-        </Box>
-        <Box width={20}>
-          <Text bold dimColor>CONTENT</Text>
-        </Box>
-        <Box width={30}>
-          <Text bold dimColor>USAGE</Text>
-        </Box>
+        <Box width={cols.status}><Text bold dimColor wrap="truncate">S</Text></Box>
+        <Box width={cols.name}><Text bold dimColor wrap="truncate">NAME</Text></Box>
+        <Box width={cols.type}><Text bold dimColor wrap="truncate">TYPE</Text></Box>
+        {cols.content > 0 && <Box width={cols.content}><Text bold dimColor wrap="truncate">CONTENT</Text></Box>}
+        <Box width={cols.usage}><Text bold dimColor wrap="truncate">USAGE</Text></Box>
       </Box>
 
-      {/* Storage */}
       {storage.map((store, index) => {
         const isSelected = index === selectedIndex;
-        const usedPercent =
-          store.total > 0 ? (store.used / store.total) * 100 : 0;
+        const usedPercent = store.total > 0 ? (store.used / store.total) * 100 : 0;
+        const barWidth = Math.max(6, cols.usage - 12);
 
         return (
           <Box key={store.storage}>
-            <Text inverse={isSelected}>
-              <Text color={store.active ? "green" : "red"}>
+            <Box width={cols.status}>
+              <Text inverse={isSelected} color={store.active ? "green" : "red"}>
                 {store.active ? "●" : "○"}
               </Text>
-              <Text> </Text>
-            </Text>
-            <Text inverse={isSelected}>{store.storage.padEnd(15)}</Text>
-            <Text inverse={isSelected} dimColor={!isSelected}>{store.type.padEnd(11)}</Text>
-            <Text inverse={isSelected} dimColor={!isSelected}>{store.content.padEnd(19)}</Text>
-            {store.total > 0 ? (
-              <Box>
-                <ProgressBar percent={usedPercent} width={12} showPercent={false} />
-                <Text dimColor>
-                  {" "}{formatBytes(store.used)}/{formatBytes(store.total)}
-                </Text>
+            </Box>
+            <Box width={cols.name}>
+              <Text inverse={isSelected} wrap="truncate">{truncate(store.storage, cols.name - 1)}</Text>
+            </Box>
+            <Box width={cols.type}>
+              <Text inverse={isSelected} dimColor={!isSelected} wrap="truncate">{truncate(store.type, cols.type - 1)}</Text>
+            </Box>
+            {cols.content > 0 && (
+              <Box width={cols.content}>
+                <Text inverse={isSelected} dimColor={!isSelected} wrap="truncate">{truncate(store.content, cols.content - 1)}</Text>
               </Box>
-            ) : (
-              <Text dimColor>-</Text>
             )}
+            <Box width={cols.usage}>
+              {store.total > 0 ? (
+                <>
+                  <ProgressBar percent={usedPercent} width={barWidth} showPercent={false} />
+                  <Text dimColor wrap="truncate"> {formatBytes(store.used)}</Text>
+                </>
+              ) : (
+                <Text dimColor>-</Text>
+              )}
+            </Box>
           </Box>
         );
       })}

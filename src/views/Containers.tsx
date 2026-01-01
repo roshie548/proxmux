@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Box, Text, useInput } from "ink";
+import React, { useState, useMemo } from "react";
+import { Box, Text, useInput, useStdout } from "ink";
 import { spawnSync } from "child_process";
 import { useContainers } from "../hooks/useProxmox.ts";
 import { useKeyboardNavigation } from "../hooks/useKeyboard.ts";
@@ -9,17 +9,95 @@ import { DetailView } from "../components/DetailView.tsx";
 import { formatBytes, formatUptime, truncate } from "../utils/format.ts";
 import type { Container } from "../api/types.ts";
 
+interface ColumnConfig {
+  stWidth: number;
+  idWidth: number;
+  nameWidth: number;
+  nodeWidth: number;
+  cpuWidth: number;
+  memWidth: number;
+  uptimeWidth: number;
+  showNode: boolean;
+  showUptime: boolean;
+}
+
 type PendingAction = { type: "stop" | "reboot"; vmid: number; node: string; name: string } | null;
 
 interface ContainersProps {
   host: string;
 }
 
+function calculateColumns(availableWidth: number): ColumnConfig {
+  // Fixed columns
+  const stWidth = 2;
+  const idWidth = 5;
+  const cpuWidth = 4;
+  const memWidth = 9;
+
+  // Optional columns - uptime needs more space for full format
+  const nodeWidth = 8;
+  const uptimeWidthFull = 12;  // "192d 3h 46m"
+  const uptimeWidthCompact = 6; // "192d"
+
+  const fixedTotal = stWidth + idWidth + cpuWidth + memWidth;
+  const remaining = availableWidth - fixedTotal;
+  const minNameWidth = 10;
+
+  // Decide which optional columns to show
+  const needForAllFull = minNameWidth + nodeWidth + uptimeWidthFull;
+  const needForAllCompact = minNameWidth + nodeWidth + uptimeWidthCompact;
+  const needForNode = minNameWidth + nodeWidth;
+
+  if (remaining < needForNode) {
+    // Very narrow: essential columns only
+    return {
+      stWidth, idWidth, cpuWidth, memWidth,
+      nameWidth: Math.max(minNameWidth, remaining),
+      nodeWidth: 0, uptimeWidth: 0,
+      showNode: false, showUptime: false,
+    };
+  }
+
+  if (remaining < needForAllCompact) {
+    // Narrow: hide uptime
+    return {
+      stWidth, idWidth, cpuWidth, memWidth,
+      nameWidth: Math.max(minNameWidth, remaining - nodeWidth),
+      nodeWidth, uptimeWidth: 0,
+      showNode: true, showUptime: false,
+    };
+  }
+
+  if (remaining < needForAllFull) {
+    // Medium: compact uptime
+    return {
+      stWidth, idWidth, cpuWidth, memWidth,
+      nameWidth: Math.max(minNameWidth, remaining - nodeWidth - uptimeWidthCompact),
+      nodeWidth, uptimeWidth: uptimeWidthCompact,
+      showNode: true, showUptime: true,
+    };
+  }
+
+  // Wide: full uptime, give extra space to name
+  const extraSpace = remaining - needForAllFull;
+  return {
+    stWidth, idWidth, cpuWidth, memWidth,
+    nameWidth: Math.min(28, minNameWidth + extraSpace),
+    nodeWidth, uptimeWidth: uptimeWidthFull,
+    showNode: true, showUptime: true,
+  };
+}
+
 export function Containers({ host }: ContainersProps) {
-  const { containers: unsortedContainers, loading, error, refresh, startContainer, stopContainer, rebootContainer } =
+  const { stdout } = useStdout();
+  const terminalWidth = stdout?.columns || 80;
+  // Account for sidebar (~18) and padding
+  const contentWidth = Math.max(40, terminalWidth - 20);
+  const cols = useMemo(() => calculateColumns(contentWidth), [contentWidth]);
+
+  const { containers: unsortedContainers, loading, error, refresh, startContainer, stopContainer, rebootContainer, updateContainer } =
     useContainers();
 
-  // Sort containers by ID
   const containers = [...unsortedContainers].sort((a, b) => a.vmid - b.vmid);
   const [actionLoading, setActionLoading] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -170,6 +248,9 @@ export function Containers({ host }: ContainersProps) {
           await rebootContainer(selectedContainer.node, selectedContainer.vmid);
         }}
         onConsole={handleConsole}
+        onUpdate={async (config) => {
+          await updateContainer(selectedContainer.node, selectedContainer.vmid, config);
+        }}
       />
     );
   }
@@ -202,7 +283,6 @@ export function Containers({ host }: ContainersProps) {
         {actionError && <Text color="red"> Error: {actionError}</Text>}
       </Box>
 
-      {/* Confirmation dialog */}
       {pendingAction && (
         <Box marginBottom={1} paddingX={1} borderStyle="round" borderColor="yellow">
           <Text color="yellow">
@@ -212,32 +292,16 @@ export function Containers({ host }: ContainersProps) {
         </Box>
       )}
 
-      {/* Header */}
       <Box>
-        <Box width={4}>
-          <Text bold dimColor>ST</Text>
-        </Box>
-        <Box width={8}>
-          <Text bold dimColor>CTID</Text>
-        </Box>
-        <Box width={30}>
-          <Text bold dimColor>NAME</Text>
-        </Box>
-        <Box width={16}>
-          <Text bold dimColor>NODE</Text>
-        </Box>
-        <Box width={10}>
-          <Text bold dimColor>CPU</Text>
-        </Box>
-        <Box width={14}>
-          <Text bold dimColor>MEM</Text>
-        </Box>
-        <Box width={14}>
-          <Text bold dimColor>UPTIME</Text>
-        </Box>
+        <Box width={cols.stWidth}><Text bold dimColor wrap="truncate">S</Text></Box>
+        <Box width={cols.idWidth}><Text bold dimColor wrap="truncate">CTID</Text></Box>
+        <Box width={cols.nameWidth}><Text bold dimColor wrap="truncate">NAME</Text></Box>
+        {cols.showNode && <Box width={cols.nodeWidth}><Text bold dimColor wrap="truncate">NODE</Text></Box>}
+        <Box width={cols.cpuWidth}><Text bold dimColor wrap="truncate">CPU</Text></Box>
+        <Box width={cols.memWidth}><Text bold dimColor wrap="truncate">MEM</Text></Box>
+        {cols.showUptime && <Box width={cols.uptimeWidth}><Text bold dimColor wrap="truncate">UP</Text></Box>}
       </Box>
 
-      {/* Containers */}
       {containers.map((container, index) => {
         const isSelected = index === selectedIndex;
         const isLoading = actionLoading === container.vmid;
@@ -245,32 +309,35 @@ export function Containers({ host }: ContainersProps) {
 
         return (
           <Box key={`${container.node}-${container.vmid}`}>
-            <Box width={4}>
-              <Text inverse={isSelected}>
-                {isLoading ? "◌ " : <StatusBadge status={container.status} showLabel={false} />}
-                {" "}
+            <Box width={cols.stWidth}>
+              <Text inverse={isSelected} wrap="truncate">
+                {isLoading ? "◌" : <StatusBadge status={container.status} showLabel={false} />}
               </Text>
             </Box>
-            <Box width={8}>
-              <Text inverse={isSelected}>{container.vmid}</Text>
+            <Box width={cols.idWidth}>
+              <Text inverse={isSelected} wrap="truncate">{container.vmid}</Text>
             </Box>
-            <Box width={30}>
-              <Text inverse={isSelected}>{truncate(container.name || `CT ${container.vmid}`, 28)}</Text>
+            <Box width={cols.nameWidth}>
+              <Text inverse={isSelected} wrap="truncate">{truncate(container.name || `CT${container.vmid}`, cols.nameWidth - 1)}</Text>
             </Box>
-            <Box width={16}>
-              <Text inverse={isSelected} dimColor={!isSelected}>{container.node}</Text>
+            {cols.showNode && (
+              <Box width={cols.nodeWidth}>
+                <Text inverse={isSelected} dimColor={!isSelected} wrap="truncate">{truncate(container.node, cols.nodeWidth - 1)}</Text>
+              </Box>
+            )}
+            <Box width={cols.cpuWidth}>
+              <Text inverse={isSelected} wrap="truncate">{cpuPercent}%</Text>
             </Box>
-            <Box width={10}>
-              <Text inverse={isSelected}>{cpuPercent}%</Text>
+            <Box width={cols.memWidth}>
+              <Text inverse={isSelected} wrap="truncate">{formatBytes(container.mem)}</Text>
             </Box>
-            <Box width={14}>
-              <Text inverse={isSelected}>{formatBytes(container.mem)}</Text>
-            </Box>
-            <Box width={14}>
-              <Text inverse={isSelected} dimColor={!isSelected}>
-                {container.status === "running" ? formatUptime(container.uptime) : "-"}
-              </Text>
-            </Box>
+            {cols.showUptime && (
+              <Box width={cols.uptimeWidth}>
+                <Text inverse={isSelected} dimColor={!isSelected} wrap="truncate">
+                  {container.status === "running" ? formatUptime(container.uptime, cols.uptimeWidth < 10) : "-"}
+                </Text>
+              </Box>
+            )}
           </Box>
         );
       })}

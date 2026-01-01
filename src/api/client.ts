@@ -6,6 +6,7 @@ import type {
   VMConfig,
   Container,
   ContainerConfig,
+  ContainerConfigUpdate,
   Storage,
   Task,
   ResourceSummary,
@@ -189,6 +190,14 @@ export class ProxmoxClient {
 
   async getContainerInterfaces(node: string, vmid: number): Promise<NetworkInterface[]> {
     return this.request<NetworkInterface[]>("GET", `/nodes/${node}/lxc/${vmid}/interfaces`);
+  }
+
+  async updateContainerConfig(
+    node: string,
+    vmid: number,
+    config: Partial<ContainerConfigUpdate>
+  ): Promise<string> {
+    return this.request<string>("PUT", `/nodes/${node}/lxc/${vmid}/config`, config as Record<string, unknown>);
   }
 
   // Storage operations
