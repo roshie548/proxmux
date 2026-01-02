@@ -18,20 +18,45 @@ A terminal UI for managing Proxmox VE, built with [Ink](https://github.com/vadim
 
 ## Requirements
 
-- [Bun](https://bun.sh) v1.0.0 or later
 - Proxmox VE with API access
 - API token (recommended) or user credentials
 
 ## Installation
 
-### From npm (recommended)
+### Homebrew (macOS/Linux)
 
 ```bash
-# Install globally
-bun install -g proxmux
+brew install roshie548/tap/proxmux
+```
 
-# Run
+### npm
+
+Requires [Bun](https://bun.sh) runtime.
+
+```bash
+bunx proxmux
+```
+
+Or install globally:
+
+```bash
+bun install -g proxmux
 proxmux
+```
+
+### Standalone Binary
+
+Download the latest binary for your platform from [Releases](https://github.com/roshie548/proxmux/releases):
+
+- **macOS Apple Silicon**: `proxmux-darwin-arm64`
+- **macOS Intel**: `proxmux-darwin-x64`
+- **Linux x64**: `proxmux-linux-x64`
+- **Linux ARM64**: `proxmux-linux-arm64`
+- **Windows**: `proxmux-windows-x64.exe`
+
+```bash
+chmod +x proxmux-*
+./proxmux-darwin-arm64  # or your platform
 ```
 
 ### From source
