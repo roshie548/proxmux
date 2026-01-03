@@ -7,13 +7,14 @@ import type {
   Container,
   ContainerConfig,
   Storage,
+  StorageContent,
   Task,
   ResourceSummary,
   NetworkInterface,
   Template,
   AvailableTemplate,
   LXCCreateConfig,
-  StorageContent,
+  VMCreateConfig,
 } from "./types.ts";
 
 export class ProxmoxClient {
@@ -142,6 +143,120 @@ export class ProxmoxClient {
 
   async getVMConfig(node: string, vmid: number): Promise<VMConfig> {
     return this.request<VMConfig>("GET", `/nodes/${node}/qemu/${vmid}/config`);
+  }
+
+  // VM Creation operations
+  async getNextVmid(): Promise<number> {
+    return this.request<number>("GET", "/cluster/nextid");
+  }
+
+  async getStorageContent(
+    node: string,
+    storage: string,
+    contentType?: "iso" | "vztmpl" | "backup" | "images" | "rootdir"
+  ): Promise<StorageContent[]> {
+    const path = contentType
+      ? `/nodes/${node}/storage/${storage}/content?content=${contentType}`
+      : `/nodes/${node}/storage/${storage}/content`;
+    return this.request<StorageContent[]>("GET", path);
+  }
+
+  async getIsos(node: string, storage: string): Promise<StorageContent[]> {
+    return this.getStorageContent(node, storage, "iso");
+  }
+
+  async getStoragesForContent(
+    node: string,
+    contentType?: "images" | "iso" | "vztmpl" | "backup" | "rootdir"
+  ): Promise<Storage[]> {
+    const storages = await this.getStorage(node);
+    if (!contentType) {
+      return storages;
+    }
+    // Filter storages that support the requested content type
+    return storages.filter((s) => s.content.split(",").includes(contentType));
+  }
+
+  async getNetworkBridges(node: string): Promise<string[]> {
+    interface NetworkDevice {
+      iface: string;
+      type: string;
+      bridge_ports?: string;
+      active?: number;
+    }
+    const networks = await this.request<NetworkDevice[]>(
+      "GET",
+      `/nodes/${node}/network`
+    );
+    return networks
+      .filter((n) => n.type === "bridge")
+      .map((n) => n.iface)
+      .sort();
+  }
+
+  async createVM(node: string, config: VMCreateConfig): Promise<string> {
+    // Build the request body for Proxmox API
+    const body: Record<string, unknown> = {
+      vmid: config.vmid,
+      name: config.name,
+      ostype: config.ostype,
+      cores: config.cores,
+      sockets: config.sockets,
+      memory: config.memory,
+    };
+
+    // Add ISO if provided
+    if (config.iso) {
+      body.ide2 = `${config.iso},media=cdrom`;
+    }
+
+    // Add disk configuration
+    const diskFormat = config.disk.format || "qcow2";
+    body.scsi0 = `${config.disk.storage}:${config.disk.size},format=${diskFormat}`;
+
+    // Add SCSI controller for better performance
+    body.scsihw = "virtio-scsi-pci";
+
+    // Add network configuration
+    const netModel = config.network.model || "virtio";
+    let net0 = `${netModel},bridge=${config.network.bridge}`;
+    if (config.network.macaddr) {
+      net0 += `,macaddr=${config.network.macaddr}`;
+    }
+    if (config.network.firewall) {
+      net0 += ",firewall=1";
+    }
+    body.net0 = net0;
+
+    // Add boot order
+    if (config.boot) {
+      body.boot = config.boot;
+    } else {
+      // Default boot order: disk first, then cdrom, then network
+      body.boot = "order=scsi0;ide2;net0";
+    }
+
+    // Add CPU type if specified
+    if (config.cpu) {
+      body.cpu = config.cpu;
+    }
+
+    // Add BIOS if specified
+    if (config.bios) {
+      body.bios = config.bios;
+    }
+
+    // Add machine type if specified
+    if (config.machine) {
+      body.machine = config.machine;
+    }
+
+    // Add start after creation
+    if (config.start) {
+      body.start = 1;
+    }
+
+    return this.request<string>("POST", `/nodes/${node}/qemu`, body);
   }
 
   // Container operations

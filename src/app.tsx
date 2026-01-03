@@ -82,7 +82,7 @@ export function App({ config }: AppProps) {
       case "dashboard":
         return <Dashboard />;
       case "vms":
-        return <VMs />;
+        return <VMs onFormActiveChange={setFormActive} />;
       case "containers":
         return <Containers host={config.host} onFormActiveChange={setFormActive} />;
       case "storage":
