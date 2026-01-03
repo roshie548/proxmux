@@ -100,9 +100,10 @@ describe("TextInput", () => {
         />
       );
 
-      // Active state shows border
-      expect(lastFrame()).toContain("┌");
-      expect(lastFrame()).toContain("└");
+      // Active state shows brackets with cursor
+      expect(lastFrame()).toContain("[");
+      expect(lastFrame()).toContain("]");
+      expect(lastFrame()).toContain("█"); // cursor
     });
 
     test("respects width prop", () => {

@@ -63,7 +63,7 @@ describe("Select", () => {
         />
       );
 
-      expect(lastFrame()).toContain("[Enter to open]");
+      expect(lastFrame()).toContain("↵ to open");
     });
 
     test("does not show hint when inactive", () => {
@@ -125,9 +125,10 @@ describe("Select", () => {
         />
       );
 
-      // Active state shows border
-      expect(lastFrame()).toContain("┌");
-      expect(lastFrame()).toContain("└");
+      // Active state shows brackets and hint
+      expect(lastFrame()).toContain("[");
+      expect(lastFrame()).toContain("]");
+      expect(lastFrame()).toContain("↵ to open");
     });
 
     test("shows selected value label correctly", () => {
