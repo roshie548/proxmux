@@ -30,6 +30,9 @@
   "scripts": {
     "start": "bun run src/index.tsx",
     "dev": "bun --watch run src/index.tsx",
+    "test": "bun test",
+    "test:watch": "bun test --watch",
+    "test:coverage": "bun test --coverage",
     "build": "bun build ./src/index.tsx --compile --minify --outfile dist/proxmux",
     "build:darwin-arm64": "bun build ./src/index.tsx --compile --minify --target=bun-darwin-arm64 --outfile dist/proxmux-darwin-arm64",
     "build:darwin-x64": "bun build ./src/index.tsx --compile --minify --target=bun-darwin-x64 --outfile dist/proxmux-darwin-x64",
@@ -50,6 +53,7 @@
   "devDependencies": {
     "@types/bun": "latest",
     "@types/react": "^18.3.12",
+    "ink-testing-library": "^4.0.0",
     "react-devtools-core": "^7.0.1",
     "typescript": "^5.7.2"
   }

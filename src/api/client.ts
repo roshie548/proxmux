@@ -8,9 +8,13 @@ import type {
   ContainerConfig,
   ContainerConfigUpdate,
   Storage,
+  StorageContent,
   Task,
   ResourceSummary,
   NetworkInterface,
+  AvailableTemplate,
+  LXCCreateConfig,
+  VMCreateConfig,
 } from "./types.ts";
 
 export class ProxmoxClient {
@@ -141,6 +145,120 @@ export class ProxmoxClient {
     return this.request<VMConfig>("GET", `/nodes/${node}/qemu/${vmid}/config`);
   }
 
+  // VM Creation operations
+  async getNextVmid(): Promise<number> {
+    return this.request<number>("GET", "/cluster/nextid");
+  }
+
+  async getStorageContent(
+    node: string,
+    storage: string,
+    contentType?: "iso" | "vztmpl" | "backup" | "images" | "rootdir"
+  ): Promise<StorageContent[]> {
+    const path = contentType
+      ? `/nodes/${node}/storage/${storage}/content?content=${contentType}`
+      : `/nodes/${node}/storage/${storage}/content`;
+    return this.request<StorageContent[]>("GET", path);
+  }
+
+  async getIsos(node: string, storage: string): Promise<StorageContent[]> {
+    return this.getStorageContent(node, storage, "iso");
+  }
+
+  async getStoragesForContent(
+    node: string,
+    contentType?: "images" | "iso" | "vztmpl" | "backup" | "rootdir"
+  ): Promise<Storage[]> {
+    const storages = await this.getStorage(node);
+    if (!contentType) {
+      return storages;
+    }
+    // Filter storages that support the requested content type
+    return storages.filter((s) => s.content.split(",").includes(contentType));
+  }
+
+  async getNetworkBridges(node: string): Promise<string[]> {
+    interface NetworkDevice {
+      iface: string;
+      type: string;
+      bridge_ports?: string;
+      active?: number;
+    }
+    const networks = await this.request<NetworkDevice[]>(
+      "GET",
+      `/nodes/${node}/network`
+    );
+    return networks
+      .filter((n) => n.type === "bridge")
+      .map((n) => n.iface)
+      .sort();
+  }
+
+  async createVM(node: string, config: VMCreateConfig): Promise<string> {
+    // Build the request body for Proxmox API
+    const body: Record<string, unknown> = {
+      vmid: config.vmid,
+      name: config.name,
+      ostype: config.ostype,
+      cores: config.cores,
+      sockets: config.sockets,
+      memory: config.memory,
+    };
+
+    // Add ISO if provided
+    if (config.iso) {
+      body.ide2 = `${config.iso},media=cdrom`;
+    }
+
+    // Add disk configuration
+    const diskFormat = config.disk.format || "qcow2";
+    body.scsi0 = `${config.disk.storage}:${config.disk.size},format=${diskFormat}`;
+
+    // Add SCSI controller for better performance
+    body.scsihw = "virtio-scsi-pci";
+
+    // Add network configuration
+    const netModel = config.network.model || "virtio";
+    let net0 = `${netModel},bridge=${config.network.bridge}`;
+    if (config.network.macaddr) {
+      net0 += `,macaddr=${config.network.macaddr}`;
+    }
+    if (config.network.firewall) {
+      net0 += ",firewall=1";
+    }
+    body.net0 = net0;
+
+    // Add boot order
+    if (config.boot) {
+      body.boot = config.boot;
+    } else {
+      // Default boot order: disk first, then cdrom, then network
+      body.boot = "order=scsi0;ide2;net0";
+    }
+
+    // Add CPU type if specified
+    if (config.cpu) {
+      body.cpu = config.cpu;
+    }
+
+    // Add BIOS if specified
+    if (config.bios) {
+      body.bios = config.bios;
+    }
+
+    // Add machine type if specified
+    if (config.machine) {
+      body.machine = config.machine;
+    }
+
+    // Add start after creation
+    if (config.start) {
+      body.start = 1;
+    }
+
+    return this.request<string>("POST", `/nodes/${node}/qemu`, body);
+  }
+
   // Container operations
   async getContainers(node?: string): Promise<Container[]> {
     if (node) {
@@ -198,6 +316,150 @@ export class ProxmoxClient {
     config: Partial<ContainerConfigUpdate>
   ): Promise<string> {
     return this.request<string>("PUT", `/nodes/${node}/lxc/${vmid}/config`, config as Record<string, unknown>);
+  }
+
+  // LXC Creation operations
+
+  /**
+   * Get the next available VMID from the cluster
+   */
+  async getNextVMID(): Promise<number> {
+    const result = await this.request<string>("GET", "/cluster/nextid");
+    return parseInt(result, 10);
+  }
+
+  /**
+   * Get local templates stored on a specific storage
+   */
+  async getTemplates(node: string, storage: string): Promise<StorageContent[]> {
+    const contents = await this.request<StorageContent[]>(
+      "GET",
+      `/nodes/${node}/storage/${storage}/content?content=vztmpl`
+    );
+    return contents.filter((c) => c.content === "vztmpl");
+  }
+
+  /**
+   * Get all local templates from all storages on a node
+   */
+  async getAllTemplates(node: string): Promise<StorageContent[]> {
+    const storages = await this.request<Storage[]>("GET", `/nodes/${node}/storage`);
+    const templateStorages = storages.filter(
+      (s) => s.content.includes("vztmpl") && s.active === 1
+    );
+
+    const templatePromises = templateStorages.map((s) =>
+      this.getTemplates(node, s.storage).catch(() => [] as StorageContent[])
+    );
+
+    const results = await Promise.all(templatePromises);
+    return results.flat();
+  }
+
+  /**
+   * Get available templates from Proxmox repository (aplinfo)
+   */
+  async getAvailableTemplates(node: string): Promise<AvailableTemplate[]> {
+    return this.request<AvailableTemplate[]>("GET", `/nodes/${node}/aplinfo`);
+  }
+
+  /**
+   * Download a template from the Proxmox repository
+   * Returns a task UPID to track progress
+   */
+  async downloadTemplate(
+    node: string,
+    storage: string,
+    template: string
+  ): Promise<string> {
+    return this.request<string>("POST", `/nodes/${node}/aplinfo`, {
+      storage,
+      template,
+    });
+  }
+
+  /**
+   * Get storages that can hold container templates
+   */
+  async getTemplateStorages(node: string): Promise<Storage[]> {
+    const storages = await this.request<Storage[]>("GET", `/nodes/${node}/storage`);
+    return storages.filter(
+      (s) => s.content.includes("vztmpl") && s.active === 1 && s.enabled === 1
+    );
+  }
+
+  /**
+   * Get storages that can hold container root filesystems
+   */
+  async getRootfsStorages(node: string): Promise<Storage[]> {
+    const storages = await this.request<Storage[]>("GET", `/nodes/${node}/storage`);
+    return storages.filter(
+      (s) => s.content.includes("rootdir") && s.active === 1 && s.enabled === 1
+    );
+  }
+
+  /**
+   * Get network bridges available on a node (returns full interface info)
+   */
+  async getNetworkBridgesForLXC(node: string): Promise<{ iface: string; type: string; active: number }[]> {
+    const networks = await this.request<{ iface: string; type: string; active: number }[]>(
+      "GET",
+      `/nodes/${node}/network`
+    );
+    return networks.filter((n) => n.type === "bridge" && n.active === 1);
+  }
+
+  /**
+   * Create a new LXC container
+   * Returns a task UPID to track progress
+   */
+  async createContainer(node: string, config: LXCCreateConfig): Promise<string> {
+    // Convert boolean values to 0/1 for Proxmox API
+    const apiConfig: Record<string, unknown> = {
+      vmid: config.vmid,
+      hostname: config.hostname,
+      ostemplate: config.ostemplate,
+      rootfs: config.rootfs,
+    };
+
+    if (config.password) {
+      apiConfig.password = config.password;
+    }
+    if (config["ssh-public-keys"]) {
+      apiConfig["ssh-public-keys"] = config["ssh-public-keys"];
+    }
+    if (config.cores !== undefined) {
+      apiConfig.cores = config.cores;
+    }
+    if (config.memory !== undefined) {
+      apiConfig.memory = config.memory;
+    }
+    if (config.swap !== undefined) {
+      apiConfig.swap = config.swap;
+    }
+    if (config.net0) {
+      apiConfig.net0 = config.net0;
+    }
+    if (config.nameserver) {
+      apiConfig.nameserver = config.nameserver;
+    }
+    if (config.searchdomain) {
+      apiConfig.searchdomain = config.searchdomain;
+    }
+    if (config.unprivileged !== undefined) {
+      apiConfig.unprivileged = config.unprivileged ? 1 : 0;
+    }
+    if (config.start !== undefined) {
+      apiConfig.start = config.start ? 1 : 0;
+    }
+    if (config.features) {
+      apiConfig.features = config.features;
+    }
+    if (config.onboot !== undefined) {
+      apiConfig.onboot = config.onboot ? 1 : 0;
+    }
+
+    return this.request<string>("POST", `/nodes/${node}/lxc`, apiConfig);
   }
 
   // Storage operations
