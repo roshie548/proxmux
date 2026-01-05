@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
 import { spawnSync } from "child_process";
 import { useContainers } from "../hooks/useProxmox.ts";
@@ -6,6 +6,7 @@ import { useKeyboardNavigation } from "../hooks/useKeyboard.ts";
 import { Spinner } from "../components/common/Spinner.tsx";
 import { StatusBadge } from "../components/common/StatusBadge.tsx";
 import { DetailView } from "../components/DetailView.tsx";
+import { CreateLXC } from "./CreateLXC.tsx";
 import { formatBytes, formatUptime, truncate } from "../utils/format.ts";
 import type { Container } from "../api/types.ts";
 
@@ -25,6 +26,7 @@ type PendingAction = { type: "stop" | "reboot"; vmid: number; node: string; name
 
 interface ContainersProps {
   host: string;
+  onFormActiveChange?: (active: boolean) => void;
 }
 
 function calculateColumns(availableWidth: number): ColumnConfig {
@@ -88,7 +90,7 @@ function calculateColumns(availableWidth: number): ColumnConfig {
   };
 }
 
-export function Containers({ host }: ContainersProps) {
+export function Containers({ host, onFormActiveChange }: ContainersProps) {
   const { stdout } = useStdout();
   const terminalWidth = stdout?.columns || 80;
   // Account for sidebar (~18) and padding
@@ -104,6 +106,12 @@ export function Containers({ host }: ContainersProps) {
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [selectedContainer, setSelectedContainer] = useState<Container | null>(null);
   const [consoleActive, setConsoleActive] = useState(false);
+  const [showCreateWizard, setShowCreateWizard] = useState(false);
+
+  // Notify parent when form mode changes
+  useEffect(() => {
+    onFormActiveChange?.(showCreateWizard);
+  }, [showCreateWizard, onFormActiveChange]);
 
   // Extract hostname from Proxmox URL for SSH
   const proxmoxHost = (() => {
@@ -150,12 +158,12 @@ export function Containers({ host }: ContainersProps) {
 
   const { selectedIndex } = useKeyboardNavigation({
     itemCount: containers.length,
-    enabled: !actionLoading && !pendingAction && !selectedContainer && !consoleActive,
+    enabled: !actionLoading && !pendingAction && !selectedContainer && !consoleActive && !showCreateWizard,
   });
 
   useInput(
     async (input, key) => {
-      if (actionLoading || selectedContainer) return;
+      if (actionLoading || selectedContainer || showCreateWizard) return;
 
       // Clear previous error on any key
       if (actionError) {
@@ -194,6 +202,12 @@ export function Containers({ host }: ContainersProps) {
         return;
       }
 
+      // Create new container
+      if (input === "c") {
+        setShowCreateWizard(true);
+        return;
+      }
+
       // Open detail view on Enter
       if (key.return) {
         setSelectedContainer(container);
@@ -216,8 +230,23 @@ export function Containers({ host }: ContainersProps) {
         setPendingAction({ type: "reboot", vmid: container.vmid, node: container.node, name: container.name || `CT ${container.vmid}` });
       }
     },
-    { isActive: !selectedContainer && !consoleActive }
+    { isActive: !selectedContainer && !consoleActive && !showCreateWizard }
   );
+
+  // Show create wizard
+  if (showCreateWizard) {
+    return (
+      <CreateLXC
+        onComplete={() => {
+          setShowCreateWizard(false);
+          refresh();
+        }}
+        onCancel={() => {
+          setShowCreateWizard(false);
+        }}
+      />
+    );
+  }
 
   // Show message while console is active (SSH takes over the terminal)
   if (consoleActive) {

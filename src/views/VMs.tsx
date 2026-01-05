@@ -1,16 +1,21 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
 import { useVMs } from "../hooks/useProxmox.ts";
 import { useKeyboardNavigation } from "../hooks/useKeyboard.ts";
 import { Spinner } from "../components/common/Spinner.tsx";
 import { StatusBadge } from "../components/common/StatusBadge.tsx";
 import { DetailView } from "../components/DetailView.tsx";
+import { CreateVM } from "./CreateVM.tsx";
 import { formatBytes, formatUptime, truncate } from "../utils/format.ts";
 import type { VM } from "../api/types.ts";
 
 type PendingAction = { type: "stop" | "reboot"; vmid: number; node: string; name: string } | null;
 
-export function VMs() {
+interface VMsProps {
+  onFormActiveChange?: (active: boolean) => void;
+}
+
+export function VMs({ onFormActiveChange }: VMsProps) {
   const { stdout } = useStdout();
   const { vms: unsortedVMs, loading, error, refresh, startVM, stopVM, rebootVM } = useVMs();
 
@@ -20,6 +25,12 @@ export function VMs() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [selectedVM, setSelectedVM] = useState<VM | null>(null);
+  const [showCreateWizard, setShowCreateWizard] = useState(false);
+
+  // Notify parent when form mode changes
+  useEffect(() => {
+    onFormActiveChange?.(showCreateWizard);
+  }, [showCreateWizard, onFormActiveChange]);
 
   // Responsive column widths
   const terminalWidth = stdout?.columns || 80;
@@ -39,12 +50,12 @@ export function VMs() {
 
   const { selectedIndex } = useKeyboardNavigation({
     itemCount: vms.length,
-    enabled: !actionLoading && !pendingAction && !selectedVM,
+    enabled: !actionLoading && !pendingAction && !selectedVM && !showCreateWizard,
   });
 
   useInput(
     async (input, key) => {
-      if (actionLoading || selectedVM) return;
+      if (actionLoading || selectedVM || showCreateWizard) return;
 
       // Clear previous error on any key
       if (actionError) {
@@ -83,6 +94,12 @@ export function VMs() {
         return;
       }
 
+      // Create new VM
+      if (input === "c") {
+        setShowCreateWizard(true);
+        return;
+      }
+
       // Open detail view on Enter
       if (key.return) {
         setSelectedVM(vm);
@@ -105,8 +122,23 @@ export function VMs() {
         setPendingAction({ type: "reboot", vmid: vm.vmid, node: vm.node, name: vm.name || `VM ${vm.vmid}` });
       }
     },
-    { isActive: !selectedVM }
+    { isActive: !selectedVM && !showCreateWizard }
   );
+
+  // Show create wizard
+  if (showCreateWizard) {
+    return (
+      <CreateVM
+        onComplete={() => {
+          setShowCreateWizard(false);
+          refresh();
+        }}
+        onCancel={() => {
+          setShowCreateWizard(false);
+        }}
+      />
+    );
+  }
 
   // Show detail view if a VM is selected
   if (selectedVM) {
