@@ -5,11 +5,16 @@ import { App } from "./app.tsx";
 import { EditModeProvider } from "./context/EditModeContext.tsx";
 import { loadConfig, saveConfig, getConfigPath, type ProxmuxConfig } from "./config/index.ts";
 import { initClient } from "./api/client.ts";
+import packageJson from "../package.json";
 
 (async () => {
   const args = process.argv.slice(2);
 
-  // Help command
+  if (args.includes("--version") || args.includes("-v")) {
+    console.log(`proxmux v${packageJson.version}`);
+    process.exit(0);
+  }
+
   if (args.includes("--help") || args.includes("-h")) {
     console.log(`
 proxmux - Terminal UI for Proxmox VE management
@@ -17,6 +22,7 @@ proxmux - Terminal UI for Proxmox VE management
 Usage:
   proxmux              Launch the TUI
   proxmux --config     Configure Proxmox connection
+  proxmux --version    Show version number
   proxmux --help       Show this help message
 
 Keyboard shortcuts:
@@ -41,7 +47,6 @@ Configuration:
     process.exit(0);
   }
 
-  // Config command
   if (args.includes("--config")) {
     console.log("Configure Proxmox connection\n");
 
