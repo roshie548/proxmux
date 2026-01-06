@@ -61,8 +61,9 @@ export class ProxmoxClient {
         throw new Error(
           `Authentication failed (401). Check your API token:\n` +
           `  - User format: user@realm (e.g., root@pam)\n` +
-          `  - Token ID: just the name (e.g., proxmux)\n` +
-          `  - Ensure "Privilege Separation" is unchecked in Proxmox`
+          `  - Token name: just the name portion (e.g., proxmux), not the full ID\n` +
+          `  - Ensure "Privilege Separation" is unchecked in Proxmox\n` +
+          `  - Run 'proxmux --config' to reconfigure`
         );
       }
       if (response.status === 501) {

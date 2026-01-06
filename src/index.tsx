@@ -35,7 +35,7 @@ Configuration:
   Environment variables (override config file):
     PROXMOX_HOST         Proxmox host URL (e.g., https://192.168.1.100:8006)
     PROXMOX_USER         User (e.g., root@pam)
-    PROXMOX_TOKEN_ID     API token ID
+    PROXMOX_TOKEN_ID     API token name (just the name, e.g., proxmux)
     PROXMOX_TOKEN_SECRET API token secret
 `);
     process.exit(0);
@@ -57,7 +57,15 @@ Configuration:
     try {
       const host = await question("Proxmox host URL (e.g., https://192.168.1.100:8006): ");
       const user = await question("User (e.g., root@pam): ");
-      const tokenId = await question("API token ID: ");
+      let tokenId = await question("API token name (e.g., proxmux): ");
+
+      // Parse full Token ID format (user@realm!tokenname) if provided
+      if (tokenId.includes("!")) {
+        const parts = tokenId.split("!");
+        tokenId = parts[parts.length - 1] || tokenId;
+        console.log(`  (Extracted token name: ${tokenId})`);
+      }
+
       const tokenSecret = await question("API token secret: ");
 
       const config: ProxmuxConfig = { host, user, tokenId, tokenSecret };
@@ -83,7 +91,7 @@ Please configure proxmux by running:
 Or set environment variables:
   PROXMOX_HOST=https://your-proxmox:8006
   PROXMOX_USER=root@pam
-  PROXMOX_TOKEN_ID=your-token-id
+  PROXMOX_TOKEN_ID=your-token-name
   PROXMOX_TOKEN_SECRET=your-token-secret
 `);
     process.exit(1);

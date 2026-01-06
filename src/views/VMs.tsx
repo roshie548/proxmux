@@ -10,7 +10,11 @@ import type { VM } from "../api/types.ts";
 
 type PendingAction = { type: "stop" | "reboot"; vmid: number; node: string; name: string } | null;
 
-export function VMs() {
+interface VMsProps {
+  modalOpen?: boolean;
+}
+
+export function VMs({ modalOpen }: VMsProps) {
   const { stdout } = useStdout();
   const { vms: unsortedVMs, loading, error, refresh, startVM, stopVM, rebootVM } = useVMs();
 
@@ -39,7 +43,7 @@ export function VMs() {
 
   const { selectedIndex } = useKeyboardNavigation({
     itemCount: vms.length,
-    enabled: !actionLoading && !pendingAction && !selectedVM,
+    enabled: !actionLoading && !pendingAction && !selectedVM && !modalOpen,
   });
 
   useInput(
@@ -105,7 +109,7 @@ export function VMs() {
         setPendingAction({ type: "reboot", vmid: vm.vmid, node: vm.node, name: vm.name || `VM ${vm.vmid}` });
       }
     },
-    { isActive: !selectedVM }
+    { isActive: !selectedVM && !modalOpen }
   );
 
   // Show detail view if a VM is selected

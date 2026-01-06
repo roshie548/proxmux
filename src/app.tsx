@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { useApp, useInput, useStdout } from "ink";
 import { Layout } from "./components/Layout.tsx";
+import { HelpModal } from "./components/HelpModal.tsx";
+import { ErrorModal } from "./components/ErrorModal.tsx";
 import type { View } from "./components/Sidebar.tsx";
 import { Dashboard } from "./views/Dashboard.tsx";
 import { VMs } from "./views/VMs.tsx";
@@ -23,6 +25,8 @@ export function App({ config }: AppProps) {
   const [currentView, setCurrentView] = useState<View>("dashboard");
   const [connected, setConnected] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(stdout?.rows || 24);
+  const [showHelp, setShowHelp] = useState(false);
+  const [appError, setAppError] = useState<{ title: string; message: string } | null>(null);
 
   // Update height when terminal resizes
   useEffect(() => {
@@ -45,8 +49,24 @@ export function App({ config }: AppProps) {
 
   // Global keyboard shortcuts (handles view switching and quit)
   useInput((input, key) => {
-    // Skip global shortcuts when in edit mode
     if (isEditing) return;
+
+    if (appError) {
+      setAppError(null);
+      return;
+    }
+
+    if (input === "?") {
+      setShowHelp((prev) => !prev);
+      return;
+    }
+
+    if (showHelp && key.escape) {
+      setShowHelp(false);
+      return;
+    }
+
+    if (showHelp) return;
 
     // View switching with number keys
     const num = parseInt(input);
@@ -67,14 +87,16 @@ export function App({ config }: AppProps) {
     }
   });
 
+  const modalOpen = showHelp || !!appError;
+
   const renderView = () => {
     switch (currentView) {
       case "dashboard":
         return <Dashboard />;
       case "vms":
-        return <VMs />;
+        return <VMs modalOpen={modalOpen} />;
       case "containers":
-        return <Containers host={config.host} />;
+        return <Containers host={config.host} modalOpen={modalOpen} onError={(title, message) => setAppError({ title, message })} />;
       case "storage":
         return <Storage />;
       default:
@@ -83,14 +105,18 @@ export function App({ config }: AppProps) {
   };
 
   return (
-    <Layout
-      currentView={currentView}
-      onViewChange={setCurrentView}
-      connected={connected}
-      host={config.host}
-      height={terminalHeight}
-    >
-      {renderView()}
-    </Layout>
+    <>
+      <Layout
+        currentView={currentView}
+        onViewChange={setCurrentView}
+        connected={connected}
+        host={config.host}
+        height={terminalHeight}
+      >
+        {renderView()}
+      </Layout>
+      {showHelp && <HelpModal height={terminalHeight} />}
+      {appError && <ErrorModal title={appError.title} error={appError.message} height={terminalHeight} />}
+    </>
   );
 }

@@ -25,6 +25,8 @@ type PendingAction = { type: "stop" | "reboot"; vmid: number; node: string; name
 
 interface ContainersProps {
   host: string;
+  modalOpen?: boolean;
+  onError?: (title: string, message: string) => void;
 }
 
 function calculateColumns(availableWidth: number): ColumnConfig {
@@ -88,7 +90,7 @@ function calculateColumns(availableWidth: number): ColumnConfig {
   };
 }
 
-export function Containers({ host }: ContainersProps) {
+export function Containers({ host, modalOpen, onError }: ContainersProps) {
   const { stdout } = useStdout();
   const terminalWidth = stdout?.columns || 80;
   // Account for sidebar (~18) and padding
@@ -115,29 +117,73 @@ export function Containers({ host }: ContainersProps) {
     }
   })();
 
-  // Handle console - SSH to Proxmox host and run pct enter
   const handleConsole = (vmid: number, _node: string) => {
     setConsoleActive(true);
 
-    // Give React a moment to update, then run SSH synchronously
     setTimeout(() => {
-      // Pause Ink's stdin handling and reset terminal
       process.stdin.setRawMode?.(false);
-      process.stdout.write("\x1b[?25h"); // Show cursor
+      process.stdout.write("\x1b[?25h");
       console.clear();
 
-      // Run SSH synchronously - blocks until user exits
-      // Use 'pct console' to get login prompt (like Proxmox web UI)
-      spawnSync("ssh", [
-        "-t",
-        "-o", "StrictHostKeyChecking=accept-new",
-        `root@${proxmoxHost}`,
-        `pct console ${vmid}`
-      ], {
-        stdio: "inherit",
-      });
+      let errorToShow: string | null = null;
 
-      // Restore terminal for Ink
+      try {
+        const sshTarget = proxmoxHost;
+
+        const result = spawnSync("ssh", [
+          "-t",
+          "-o", "StrictHostKeyChecking=accept-new",
+          "-o", "ConnectTimeout=10",
+          `root@${sshTarget}`,
+          `pct console ${vmid}`
+        ], {
+          stdio: "inherit",
+        });
+
+        if (result.error || (result.status !== 0 && result.status !== null)) {
+          const diagResult = spawnSync("ssh", [
+            "-v",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "ConnectTimeout=5",
+            "-o", "BatchMode=yes",
+            `root@${sshTarget}`,
+            `pct console ${vmid}`
+          ], {
+            stdio: ["pipe", "pipe", "pipe"],
+            encoding: "utf-8",
+          });
+
+          const stderr = diagResult.stderr?.trim() || "";
+          const stdout = diagResult.stdout?.trim() || "";
+          const output = stderr || stdout || "No output captured";
+
+          const stripAnsi = (str: string) => str.replace(/\x1b\[[0-9;]*m/g, "");
+
+          const relevantLines = stripAnsi(output)
+            .split("\n")
+            .filter(line => !line.startsWith("debug1:") && line.trim())
+            .slice(-10)
+            .join("\n");
+
+          const exitCode = result.status ?? diagResult.status ?? "unknown";
+
+          errorToShow =
+            `Exit code: ${exitCode}\n` +
+            `\n` +
+            `Error output:\n` +
+            `${relevantLines}\n` +
+            `\n` +
+            `Command:\n` +
+            `  ssh -t root@${sshTarget} "pct console ${vmid}"`;
+        }
+      } catch (err) {
+        errorToShow = err instanceof Error ? err.message : "Console connection failed";
+      }
+
+      if (errorToShow && onError) {
+        onError("Console Connection Failed", errorToShow);
+      }
+
       console.clear();
       process.stdin.setRawMode?.(true);
       process.stdin.resume();
@@ -150,19 +196,17 @@ export function Containers({ host }: ContainersProps) {
 
   const { selectedIndex } = useKeyboardNavigation({
     itemCount: containers.length,
-    enabled: !actionLoading && !pendingAction && !selectedContainer && !consoleActive,
+    enabled: !actionLoading && !pendingAction && !selectedContainer && !consoleActive && !modalOpen,
   });
 
   useInput(
     async (input, key) => {
       if (actionLoading || selectedContainer) return;
 
-      // Clear previous error on any key
       if (actionError) {
         setActionError(null);
       }
 
-      // Handle confirmation dialog
       if (pendingAction) {
         if (key.return || input === "y") {
           const { type, vmid, node } = pendingAction;
@@ -216,10 +260,9 @@ export function Containers({ host }: ContainersProps) {
         setPendingAction({ type: "reboot", vmid: container.vmid, node: container.node, name: container.name || `CT ${container.vmid}` });
       }
     },
-    { isActive: !selectedContainer && !consoleActive }
+    { isActive: !selectedContainer && !consoleActive && !modalOpen }
   );
 
-  // Show message while console is active (SSH takes over the terminal)
   if (consoleActive) {
     return (
       <Box flexDirection="column">
@@ -228,7 +271,6 @@ export function Containers({ host }: ContainersProps) {
     );
   }
 
-  // Show detail view if a container is selected
   if (selectedContainer) {
     return (
       <DetailView
