@@ -1,6 +1,13 @@
 import { homedir } from "os";
 import { join } from "path";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  chmodSync,
+  statSync,
+} from "fs";
 
 export interface ProxmuxConfig {
   host: string;
@@ -11,6 +18,53 @@ export interface ProxmuxConfig {
 
 const CONFIG_DIR = join(homedir(), ".config", "proxmux");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
+
+// Secure file permission helpers
+function ensureSecureDir(dirPath: string): void {
+  if (!existsSync(dirPath)) {
+    mkdirSync(dirPath, { recursive: true, mode: 0o700 });
+  }
+  // Always chmod in case dir existed with wrong permissions
+  if (process.platform !== "win32") {
+    chmodSync(dirPath, 0o700);
+  }
+}
+
+function writeSecureFile(filePath: string, content: string): void {
+  writeFileSync(filePath, content, { mode: 0o600 });
+  // Explicit chmod handles overwrites and umask issues
+  if (process.platform !== "win32") {
+    chmodSync(filePath, 0o600);
+  }
+}
+
+function fixConfigPermissions(): void {
+  if (process.platform === "win32") return;
+
+  try {
+    // Check and fix directory permissions
+    if (existsSync(CONFIG_DIR)) {
+      const dirStats = statSync(CONFIG_DIR);
+      const dirMode = dirStats.mode & 0o777;
+      if (dirMode !== 0o700) {
+        chmodSync(CONFIG_DIR, 0o700);
+        console.log(`Fixed insecure permissions on ${CONFIG_DIR}`);
+      }
+    }
+
+    // Check and fix file permissions
+    if (existsSync(CONFIG_FILE)) {
+      const fileStats = statSync(CONFIG_FILE);
+      const fileMode = fileStats.mode & 0o777;
+      if (fileMode !== 0o600) {
+        chmodSync(CONFIG_FILE, 0o600);
+        console.log(`Fixed insecure permissions on ${CONFIG_FILE}`);
+      }
+    }
+  } catch {
+    // Silently ignore permission check failures
+  }
+}
 
 export function getConfigPath(): string {
   return CONFIG_FILE;
@@ -41,6 +95,9 @@ function loadFromEnv(): ProxmuxConfig | null {
 }
 
 function loadFromFile(): ProxmuxConfig | null {
+  // Fix insecure permissions on existing config files
+  fixConfigPermissions();
+
   if (!existsSync(CONFIG_FILE)) {
     return null;
   }
@@ -60,11 +117,8 @@ function loadFromFile(): ProxmuxConfig | null {
 }
 
 export function saveConfig(config: ProxmuxConfig): void {
-  if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
-  }
-
-  writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+  ensureSecureDir(CONFIG_DIR);
+  writeSecureFile(CONFIG_FILE, JSON.stringify(config, null, 2));
 }
 
 export function isConfigured(): boolean {
