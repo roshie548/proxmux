@@ -92,8 +92,10 @@ Create a config file at `~/.config/proxmux/config.json`:
 2. Click **Add**
 3. Select user (e.g., `root@pam`)
 4. Enter a Token ID (e.g., `proxmux`)
-5. **Uncheck** "Privilege Separation" for full access
+5. **Uncheck** "Privilege Separation" to inherit the user's permissions
 6. Copy the token secret (shown only once)
+
+> **Note:** If you leave "Privilege Separation" checked, you must manually assign permissions to the token under **Datacenter** > **Permissions**. The token needs at minimum `VM.Audit`, `VM.PowerMgmt`, and `Datastore.Audit` on `/` (or specific paths) to list and manage VMs/containers.
 
 ### Environment Variables
 
