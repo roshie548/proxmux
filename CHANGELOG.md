@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-01-05
+
+### Added
+- Help modal with keyboard shortcuts (press `?`)
+- Error modal for console connection failures with detailed SSH output
+- Token ID parsing supports full format (`user@realm!token`)
+
+### Fixed
+- Console now shows detailed error messages instead of failing silently
+- Modal overlays block input to underlying views
+- Config prompt clarifies token name vs full token ID format
+
 ## [0.3.0] - 2026-01-01
 
 ### Added
@@ -53,7 +65,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - npm package (`bunx proxmux`)
 - GitHub Actions automated releases
 
-[Unreleased]: https://github.com/roshie548/proxmux/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/roshie548/proxmux/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/roshie548/proxmux/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/roshie548/proxmux/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/roshie548/proxmux/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/roshie548/proxmux/compare/v0.2.0...v0.2.1
