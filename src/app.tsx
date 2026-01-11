@@ -96,7 +96,7 @@ export function App({ config }: AppProps) {
       case "vms":
         return <VMs modalOpen={modalOpen} />;
       case "containers":
-        return <Containers host={config.host} modalOpen={modalOpen} onError={(title, message) => setAppError({ title, message })} />;
+        return <Containers host={config.host} sshHost={config.sshHost} sshUser={config.sshUser} sshPort={config.sshPort} modalOpen={modalOpen} onError={(title, message) => setAppError({ title, message })} />;
       case "storage":
         return <Storage />;
       default:

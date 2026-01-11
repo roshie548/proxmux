@@ -75,16 +75,26 @@ bun run start
 
 ## Configuration
 
-Create a config file at `~/.config/proxmux/config.json`:
+Run the setup wizard:
+
+```bash
+proxmux --config
+```
+
+Or create a config file manually at `~/.config/proxmux/config.json`:
 
 ```json
 {
   "host": "https://your-proxmox-host:8006",
   "user": "root@pam",
   "tokenId": "your-token-id",
-  "tokenSecret": "your-token-secret"
+  "tokenSecret": "your-token-secret",
+  "sshUser": "admin",
+  "sshPort": 2222
 }
 ```
+
+The SSH settings (`sshUser`, `sshPort`, `sshHost`) are optional and only needed for container console access if you have a non-standard SSH setup.
 
 ### Creating an API Token in Proxmox
 
@@ -106,6 +116,11 @@ export PROXMOX_HOST="https://your-proxmox-host:8006"
 export PROXMOX_USER="root@pam"
 export PROXMOX_TOKEN_ID="your-token-id"
 export PROXMOX_TOKEN_SECRET="your-token-secret"
+
+# Optional SSH settings for container console
+export PROXMOX_SSH_USER="admin"
+export PROXMOX_SSH_PORT="2222"
+export PROXMOX_SSH_HOST="proxmox"  # SSH config alias
 ```
 
 ## Keyboard Shortcuts
@@ -148,6 +163,8 @@ export PROXMOX_TOKEN_SECRET="your-token-secret"
 ### Console (Containers)
 
 Select "Console (SSH)" in the detail view to open a `pct console` session. You'll see the container's login prompt. Press `Ctrl+]` or type `exit` to return to proxmux.
+
+If you have a non-standard SSH setup (non-default port, root login disabled), configure the SSH settings via `proxmux --config` or set the `PROXMOX_SSH_*` environment variables. You can also use your `~/.ssh/config` by setting `sshHost` to your SSH config alias.
 
 ## Development
 

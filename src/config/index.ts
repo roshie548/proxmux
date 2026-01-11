@@ -7,6 +7,9 @@ export interface ProxmuxConfig {
   user: string;
   tokenId: string;
   tokenSecret: string;
+  sshHost?: string;
+  sshUser?: string;
+  sshPort?: number;
 }
 
 const CONFIG_DIR = join(homedir(), ".config", "proxmux");
@@ -17,13 +20,11 @@ export function getConfigPath(): string {
 }
 
 export function loadConfig(): ProxmuxConfig | null {
-  // Environment variables take precedence
   const envConfig = loadFromEnv();
   if (envConfig) {
     return envConfig;
   }
 
-  // Fall back to config file
   return loadFromFile();
 }
 
@@ -34,10 +35,32 @@ function loadFromEnv(): ProxmuxConfig | null {
   const tokenSecret = process.env.PROXMOX_TOKEN_SECRET;
 
   if (host && user && tokenId && tokenSecret) {
-    return { host, user, tokenId, tokenSecret };
+    return {
+      host, user, tokenId, tokenSecret,
+      ...getSshEnvOverrides(),
+    };
   }
 
   return null;
+}
+
+function getSshEnvOverrides(): Partial<ProxmuxConfig> {
+  const overrides: Partial<ProxmuxConfig> = {};
+
+  if (process.env.PROXMOX_SSH_HOST) {
+    overrides.sshHost = process.env.PROXMOX_SSH_HOST;
+  }
+  if (process.env.PROXMOX_SSH_USER) {
+    overrides.sshUser = process.env.PROXMOX_SSH_USER;
+  }
+  if (process.env.PROXMOX_SSH_PORT) {
+    const port = parseInt(process.env.PROXMOX_SSH_PORT, 10);
+    if (!isNaN(port)) {
+      overrides.sshPort = port;
+    }
+  }
+
+  return overrides;
 }
 
 function loadFromFile(): ProxmuxConfig | null {
@@ -50,7 +73,7 @@ function loadFromFile(): ProxmuxConfig | null {
     const config = JSON.parse(content) as ProxmuxConfig;
 
     if (config.host && config.user && config.tokenId && config.tokenSecret) {
-      return config;
+      return { ...config, ...getSshEnvOverrides() };
     }
 
     return null;

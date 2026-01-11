@@ -25,6 +25,9 @@ type PendingAction = { type: "stop" | "reboot"; vmid: number; node: string; name
 
 interface ContainersProps {
   host: string;
+  sshHost?: string;
+  sshUser?: string;
+  sshPort?: number;
   modalOpen?: boolean;
   onError?: (title: string, message: string) => void;
 }
@@ -90,10 +93,9 @@ function calculateColumns(availableWidth: number): ColumnConfig {
   };
 }
 
-export function Containers({ host, modalOpen, onError }: ContainersProps) {
+export function Containers({ host, sshHost, sshUser, sshPort, modalOpen, onError }: ContainersProps) {
   const { stdout } = useStdout();
   const terminalWidth = stdout?.columns || 80;
-  // Account for sidebar (~18) and padding
   const contentWidth = Math.max(40, terminalWidth - 20);
   const cols = useMemo(() => calculateColumns(contentWidth), [contentWidth]);
 
@@ -107,7 +109,6 @@ export function Containers({ host, modalOpen, onError }: ContainersProps) {
   const [selectedContainer, setSelectedContainer] = useState<Container | null>(null);
   const [consoleActive, setConsoleActive] = useState(false);
 
-  // Extract hostname from Proxmox URL for SSH
   const proxmoxHost = (() => {
     try {
       const url = new URL(host);
@@ -128,34 +129,46 @@ export function Containers({ host, modalOpen, onError }: ContainersProps) {
       let errorToShow: string | null = null;
 
       try {
-        const sshTarget = proxmoxHost;
+        const sshArgs = ["-t", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10"];
 
-        const result = spawnSync("ssh", [
-          "-t",
-          "-o", "StrictHostKeyChecking=accept-new",
-          "-o", "ConnectTimeout=10",
-          `root@${sshTarget}`,
-          `pct console ${vmid}`
-        ], {
+        if (sshPort) {
+          sshArgs.push("-p", String(sshPort));
+        }
+
+        const targetHost = sshHost || proxmoxHost;
+        let sshTarget: string;
+        if (sshUser) {
+          sshTarget = `${sshUser}@${targetHost}`;
+        } else if (sshHost) {
+          sshTarget = targetHost;
+        } else {
+          sshTarget = `root@${targetHost}`;
+        }
+
+        const needsSudo = (sshUser && sshUser !== "root") || (sshHost && !sshUser);
+        const remoteCommand = needsSudo ? `sudo pct console ${vmid}` : `pct console ${vmid}`;
+
+        sshArgs.push(sshTarget, remoteCommand);
+
+        const result = spawnSync("ssh", sshArgs, {
           stdio: "inherit",
         });
 
         if (result.error || (result.status !== 0 && result.status !== null)) {
-          const diagResult = spawnSync("ssh", [
-            "-v",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "ConnectTimeout=5",
-            "-o", "BatchMode=yes",
-            `root@${sshTarget}`,
-            `pct console ${vmid}`
-          ], {
+          const diagArgs = ["-v", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes"];
+          if (sshPort) {
+            diagArgs.push("-p", String(sshPort));
+          }
+          diagArgs.push(sshTarget, remoteCommand);
+
+          const diagResult = spawnSync("ssh", diagArgs, {
             stdio: ["pipe", "pipe", "pipe"],
             encoding: "utf-8",
           });
 
           const stderr = diagResult.stderr?.trim() || "";
-          const stdout = diagResult.stdout?.trim() || "";
-          const output = stderr || stdout || "No output captured";
+          const stdoutText = diagResult.stdout?.trim() || "";
+          const output = stderr || stdoutText || "No output captured";
 
           const stripAnsi = (str: string) => str.replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -167,6 +180,8 @@ export function Containers({ host, modalOpen, onError }: ContainersProps) {
 
           const exitCode = result.status ?? diagResult.status ?? "unknown";
 
+          const displayCmd = `ssh -t ${sshPort ? `-p ${sshPort} ` : ""}${sshTarget} "${remoteCommand}"`;
+
           errorToShow =
             `Exit code: ${exitCode}\n` +
             `\n` +
@@ -174,7 +189,7 @@ export function Containers({ host, modalOpen, onError }: ContainersProps) {
             `${relevantLines}\n` +
             `\n` +
             `Command:\n` +
-            `  ssh -t root@${sshTarget} "pct console ${vmid}"`;
+            `  ${displayCmd}`;
         }
       } catch (err) {
         errorToShow = err instanceof Error ? err.message : "Console connection failed";
@@ -238,7 +253,6 @@ export function Containers({ host, modalOpen, onError }: ContainersProps) {
         return;
       }
 
-      // Open detail view on Enter
       if (key.return) {
         setSelectedContainer(container);
         return;
