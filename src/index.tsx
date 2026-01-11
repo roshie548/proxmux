@@ -1,8 +1,14 @@
 #!/usr/bin/env bun
+
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+process.env.BUN_CONFIG_TLS_REJECT_UNAUTHORIZED = "0";
+
 import React from "react";
 import { render, Box, Text } from "ink";
 import { App } from "./app.tsx";
 import { EditModeProvider } from "./context/EditModeContext.tsx";
+import { InkProvider } from "./context/InkContext.tsx";
+import { ModalProvider } from "./context/ModalContext.tsx";
 import { loadConfig, saveConfig, getConfigPath, type ProxmuxConfig } from "./config/index.ts";
 import { initClient } from "./api/client.ts";
 import packageJson from "../package.json";
@@ -43,6 +49,11 @@ Configuration:
     PROXMOX_USER         User (e.g., root@pam)
     PROXMOX_TOKEN_ID     API token name (just the name, e.g., proxmux)
     PROXMOX_TOKEN_SECRET API token secret
+
+Console access:
+  Console requires password authentication (API tokens don't work).
+  You'll be prompted for your password when first accessing console.
+  The session is cached locally and expires after ~2 hours.
 `);
     process.exit(0);
   }
@@ -102,15 +113,21 @@ Or set environment variables:
     process.exit(1);
   }
 
-  // Initialize API client before rendering
   initClient(config);
 
-  // Render the app
-  const { waitUntilExit } = render(
+  let clearFn: () => void = () => {};
+
+  const { waitUntilExit, clear } = render(
     <EditModeProvider>
-      <App config={config} />
+      <ModalProvider>
+        <InkProvider clearScreen={() => clearFn()}>
+          <App config={config} />
+        </InkProvider>
+      </ModalProvider>
     </EditModeProvider>
   );
+
+  clearFn = clear;
 
   await waitUntilExit();
 })();

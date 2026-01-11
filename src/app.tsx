@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { useApp, useInput, useStdout } from "ink";
+import { Box, useApp, useInput, useStdout } from "ink";
 import { Layout } from "./components/Layout.tsx";
 import { HelpModal } from "./components/HelpModal.tsx";
 import { ErrorModal } from "./components/ErrorModal.tsx";
@@ -11,6 +11,7 @@ import { Storage } from "./views/Storage.tsx";
 import type { ProxmuxConfig } from "./config/index.ts";
 import { getClient } from "./api/client.ts";
 import { useEditMode } from "./context/EditModeContext.tsx";
+import { useModal } from "./context/ModalContext.tsx";
 
 interface AppProps {
   config: ProxmuxConfig;
@@ -22,11 +23,14 @@ export function App({ config }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const { isEditing } = useEditMode();
+  const { isModalOpen, openModal, closeModal } = useModal();
   const [currentView, setCurrentView] = useState<View>("dashboard");
   const [connected, setConnected] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(stdout?.rows || 24);
   const [showHelp, setShowHelp] = useState(false);
   const [appError, setAppError] = useState<{ title: string; message: string } | null>(null);
+  const [consoleActive, setConsoleActive] = useState(false);
+  const [renderKey, setRenderKey] = useState(0);
 
   // Update height when terminal resizes
   useEffect(() => {
@@ -47,9 +51,24 @@ export function App({ config }: AppProps) {
       .catch(() => setConnected(false));
   }, []);
 
-  // Global keyboard shortcuts (handles view switching and quit)
+  useEffect(() => {
+    if (showHelp) {
+      openModal("help");
+    } else {
+      closeModal("help");
+    }
+  }, [showHelp, openModal, closeModal]);
+
+  useEffect(() => {
+    if (appError) {
+      openModal("error");
+    } else {
+      closeModal("error");
+    }
+  }, [appError, openModal, closeModal]);
+
   useInput((input, key) => {
-    if (isEditing) return;
+    if (isEditing || consoleActive || isModalOpen) return;
 
     if (appError) {
       setAppError(null);
@@ -96,7 +115,18 @@ export function App({ config }: AppProps) {
       case "vms":
         return <VMs modalOpen={modalOpen} />;
       case "containers":
-        return <Containers host={config.host} modalOpen={modalOpen} onError={(title, message) => setAppError({ title, message })} />;
+        return <Containers
+          modalOpen={modalOpen}
+          onError={(title, message) => setAppError({ title, message })}
+          onConsoleActiveChange={(active) => {
+            setConsoleActive(prev => {
+              if (prev && !active) {
+                setRenderKey(k => k + 1);
+              }
+              return active;
+            });
+          }}
+        />;
       case "storage":
         return <Storage />;
       default:
@@ -104,9 +134,14 @@ export function App({ config }: AppProps) {
     }
   };
 
+  if (consoleActive) {
+    return <Box />;
+  }
+
   return (
     <>
       <Layout
+        key={renderKey}
         currentView={currentView}
         onViewChange={setCurrentView}
         connected={connected}

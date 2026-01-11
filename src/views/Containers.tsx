@@ -1,12 +1,17 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
-import { spawnSync } from "child_process";
 import { useContainers } from "../hooks/useProxmox.ts";
 import { useKeyboardNavigation } from "../hooks/useKeyboard.ts";
+import { useInk } from "../context/InkContext.tsx";
+import { useModal } from "../context/ModalContext.tsx";
 import { Spinner } from "../components/common/Spinner.tsx";
 import { StatusBadge } from "../components/common/StatusBadge.tsx";
 import { DetailView } from "../components/DetailView.tsx";
+import { PasswordModal } from "../components/PasswordModal.tsx";
 import { formatBytes, formatUptime, truncate } from "../utils/format.ts";
+import { getClient } from "../api/client.ts";
+import { loadConfig } from "../config/index.ts";
+import { connectTerminal } from "../utils/terminal.ts";
 import type { Container } from "../api/types.ts";
 
 interface ColumnConfig {
@@ -24,9 +29,9 @@ interface ColumnConfig {
 type PendingAction = { type: "stop" | "reboot"; vmid: number; node: string; name: string } | null;
 
 interface ContainersProps {
-  host: string;
   modalOpen?: boolean;
   onError?: (title: string, message: string) => void;
+  onConsoleActiveChange?: (active: boolean) => void;
 }
 
 function calculateColumns(availableWidth: number): ColumnConfig {
@@ -90,10 +95,12 @@ function calculateColumns(availableWidth: number): ColumnConfig {
   };
 }
 
-export function Containers({ host, modalOpen, onError }: ContainersProps) {
+export function Containers({ modalOpen, onError, onConsoleActiveChange }: ContainersProps) {
   const { stdout } = useStdout();
+  const { clearScreen } = useInk();
+  const { openModal, closeModal } = useModal();
   const terminalWidth = stdout?.columns || 80;
-  // Account for sidebar (~18) and padding
+  const terminalHeight = stdout?.rows || 24;
   const contentWidth = Math.max(40, terminalWidth - 20);
   const cols = useMemo(() => calculateColumns(contentWidth), [contentWidth]);
 
@@ -107,101 +114,133 @@ export function Containers({ host, modalOpen, onError }: ContainersProps) {
   const [selectedContainer, setSelectedContainer] = useState<Container | null>(null);
   const [consoleActive, setConsoleActive] = useState(false);
 
-  // Extract hostname from Proxmox URL for SSH
-  const proxmoxHost = (() => {
-    try {
-      const url = new URL(host);
-      return url.hostname;
-    } catch {
-      return host;
-    }
-  })();
+  // Password modal state
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [authError, setAuthError] = useState<string | undefined>(undefined);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [pendingConsole, setPendingConsole] = useState<{ vmid: number; node: string; name?: string } | null>(null);
 
-  const handleConsole = (vmid: number, _node: string) => {
+  // Notify parent when console becomes active/inactive
+  useEffect(() => {
+    onConsoleActiveChange?.(consoleActive);
+  }, [consoleActive, onConsoleActiveChange]);
+
+  // Register password modal with modal context
+  useEffect(() => {
+    if (showPasswordModal) {
+      openModal("password");
+    } else {
+      closeModal("password");
+    }
+  }, [showPasswordModal, openModal, closeModal]);
+
+  const doConsoleConnect = async (vmid: number, node: string, name?: string) => {
     setConsoleActive(true);
 
-    setTimeout(() => {
-      process.stdin.setRawMode?.(false);
-      process.stdout.write("\x1b[?25h");
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    try {
+      const client = getClient();
+
+      const consoleTitle = name ? `Container ${vmid} - ${name}` : `Container ${vmid}`;
       console.clear();
+      console.log(`\x1b[44m\x1b[97m Connecting to ${consoleTitle}... \x1b[0m`);
+      console.log(`\x1b[90mPress Ctrl+\\ to disconnect and return to proxmux\x1b[0m\n`);
 
-      let errorToShow: string | null = null;
-
+      let termProxy;
       try {
-        const sshTarget = proxmoxHost;
-
-        const result = spawnSync("ssh", [
-          "-t",
-          "-o", "StrictHostKeyChecking=accept-new",
-          "-o", "ConnectTimeout=10",
-          `root@${sshTarget}`,
-          `pct console ${vmid}`
-        ], {
-          stdio: "inherit",
-        });
-
-        if (result.error || (result.status !== 0 && result.status !== null)) {
-          const diagResult = spawnSync("ssh", [
-            "-v",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "ConnectTimeout=5",
-            "-o", "BatchMode=yes",
-            `root@${sshTarget}`,
-            `pct console ${vmid}`
-          ], {
-            stdio: ["pipe", "pipe", "pipe"],
-            encoding: "utf-8",
-          });
-
-          const stderr = diagResult.stderr?.trim() || "";
-          const stdout = diagResult.stdout?.trim() || "";
-          const output = stderr || stdout || "No output captured";
-
-          const stripAnsi = (str: string) => str.replace(/\x1b\[[0-9;]*m/g, "");
-
-          const relevantLines = stripAnsi(output)
-            .split("\n")
-            .filter(line => !line.startsWith("debug1:") && line.trim())
-            .slice(-10)
-            .join("\n");
-
-          const exitCode = result.status ?? diagResult.status ?? "unknown";
-
-          errorToShow =
-            `Exit code: ${exitCode}\n` +
-            `\n` +
-            `Error output:\n` +
-            `${relevantLines}\n` +
-            `\n` +
-            `Command:\n` +
-            `  ssh -t root@${sshTarget} "pct console ${vmid}"`;
-        }
-      } catch (err) {
-        errorToShow = err instanceof Error ? err.message : "Console connection failed";
+        termProxy = await client.createContainerTermProxy(node, vmid);
+      } catch (apiErr) {
+        const msg = apiErr instanceof Error ? apiErr.message : "Unknown error";
+        throw new Error(`API Error (termproxy): ${msg}`);
       }
 
-      if (errorToShow && onError) {
-        onError("Console Connection Failed", errorToShow);
-      }
+      const cookie = client.getSessionCookie();
+      const user = client.getUser();
+      const wsUrl = client.getTerminalWebSocketUrl(node, vmid, termProxy.port, termProxy.ticket, "lxc");
 
-      console.clear();
-      process.stdin.setRawMode?.(true);
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      await connectTerminal({
+        wsUrl,
+        user,
+        ticket: termProxy.ticket,
+        cookie,
+        origin: client.getOrigin(),
+        onError: (err) => {
+          if (onError) {
+            onError("Console Connection Failed", `WebSocket Error: ${err}\n\nURL: ${wsUrl}`);
+          }
+        },
+      });
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Console connection failed";
+      if (onError) {
+        onError("Console Connection Failed", errorMessage);
+      }
+    } finally {
+      process.stdout.write('\x1bc\x1b[2J\x1b[H\x1b[?25h');
+
+      if (process.stdin.isTTY) {
+        process.stdin.setRawMode?.(true);
+      }
       process.stdin.resume();
 
-      setConsoleActive(false);
-      setSelectedContainer(null);
-      refresh();
-    }, 50);
+      clearScreen();
+      onConsoleActiveChange?.(false);
+      setTimeout(() => refresh(), 300);
+    }
+  };
+
+  const handleConsole = (vmid: number, node: string, name?: string) => {
+    const client = getClient();
+
+    if (!client.hasValidSession()) {
+      setPendingConsole({ vmid, node, name });
+      setShowPasswordModal(true);
+      setAuthError(undefined);
+      return;
+    }
+
+    doConsoleConnect(vmid, node, name);
+  };
+
+  const handlePasswordSubmit = async (password: string) => {
+    setAuthLoading(true);
+    setAuthError(undefined);
+
+    try {
+      const client = getClient();
+      await client.authenticateWithPassword(password);
+
+      const pending = pendingConsole;
+      setShowPasswordModal(false);
+      setPendingConsole(null);
+      setAuthLoading(false);
+
+      if (pending) {
+        doConsoleConnect(pending.vmid, pending.node, pending.name);
+      }
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : "Authentication failed");
+      setAuthLoading(false);
+    }
+  };
+
+  const handlePasswordCancel = () => {
+    setShowPasswordModal(false);
+    setPendingConsole(null);
+    setAuthError(undefined);
   };
 
   const { selectedIndex } = useKeyboardNavigation({
     itemCount: containers.length,
-    enabled: !actionLoading && !pendingAction && !selectedContainer && !consoleActive && !modalOpen,
+    enabled: !actionLoading && !pendingAction && !selectedContainer && !consoleActive && !modalOpen && !showPasswordModal,
   });
 
   useInput(
     async (input, key) => {
-      if (actionLoading || selectedContainer) return;
+      if (actionLoading || selectedContainer || showPasswordModal) return;
 
       if (actionError) {
         setActionError(null);
@@ -238,7 +277,6 @@ export function Containers({ host, modalOpen, onError }: ContainersProps) {
         return;
       }
 
-      // Open detail view on Enter
       if (key.return) {
         setSelectedContainer(container);
         return;
@@ -260,14 +298,25 @@ export function Containers({ host, modalOpen, onError }: ContainersProps) {
         setPendingAction({ type: "reboot", vmid: container.vmid, node: container.node, name: container.name || `CT ${container.vmid}` });
       }
     },
-    { isActive: !selectedContainer && !consoleActive && !modalOpen }
+    { isActive: !selectedContainer && !consoleActive && !modalOpen && !showPasswordModal }
   );
 
   if (consoleActive) {
+    return <Box />;
+  }
+
+  if (showPasswordModal) {
+    const config = loadConfig();
     return (
-      <Box flexDirection="column">
-        <Spinner label="Console session active..." />
-      </Box>
+      <PasswordModal
+        username={config?.user || "unknown"}
+        host={config?.host || "unknown"}
+        onSubmit={handlePasswordSubmit}
+        onCancel={handlePasswordCancel}
+        error={authError}
+        loading={authLoading}
+        height={terminalHeight}
+      />
     );
   }
 

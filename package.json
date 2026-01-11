@@ -45,11 +45,13 @@
   "dependencies": {
     "ink": "^5.0.1",
     "proxmux": "^0.2.0",
-    "react": "^18.3.1"
+    "react": "^18.3.1",
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/react": "^18.3.12",
+    "@types/ws": "^8.18.1",
     "react-devtools-core": "^7.0.1",
     "typescript": "^5.7.2"
   }
