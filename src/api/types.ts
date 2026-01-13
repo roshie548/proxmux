@@ -164,3 +164,11 @@ export interface NetworkInterface {
   "inet"?: string;
   "inet6"?: string;
 }
+
+// Terminal proxy response
+export interface TermProxyResponse {
+  port: string;
+  ticket: string;
+  upid: string;
+  user: string;
+}

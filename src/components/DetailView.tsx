@@ -29,7 +29,7 @@ interface DetailViewProps {
   onStart: () => Promise<void>;
   onStop: () => Promise<void>;
   onReboot: () => Promise<void>;
-  onConsole?: (vmid: number, node: string) => void;
+  onConsole?: (vmid: number, node: string, name?: string) => void;
   onUpdate?: (config: Partial<ContainerConfigUpdate>) => Promise<void>;
 }
 
@@ -438,7 +438,7 @@ export function DetailView({
         }
 
         if (action.key === "console" && onConsole) {
-          onConsole(item.vmid, item.node);
+          onConsole(item.vmid, item.node, item.name);
           return;
         }
 

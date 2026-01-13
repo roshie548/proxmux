@@ -1,6 +1,6 @@
 import { homedir } from "os";
 import { join } from "path";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "fs";
 
 export interface ProxmuxConfig {
   host: string;
@@ -9,8 +9,18 @@ export interface ProxmuxConfig {
   tokenSecret: string;
 }
 
+export interface SessionData {
+  ticket: string;
+  csrfToken: string;
+  username: string;
+  timestamp: number;
+}
+
 const CONFIG_DIR = join(homedir(), ".config", "proxmux");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
+const SESSION_FILE = join(CONFIG_DIR, "session.json");
+
+const SESSION_MAX_AGE_MS = 100 * 60 * 1000;
 
 export function getConfigPath(): string {
   return CONFIG_FILE;
@@ -50,7 +60,7 @@ function loadFromFile(): ProxmuxConfig | null {
     const config = JSON.parse(content) as ProxmuxConfig;
 
     if (config.host && config.user && config.tokenId && config.tokenSecret) {
-      return config;
+      return { host: config.host, user: config.user, tokenId: config.tokenId, tokenSecret: config.tokenSecret };
     }
 
     return null;
@@ -69,4 +79,47 @@ export function saveConfig(config: ProxmuxConfig): void {
 
 export function isConfigured(): boolean {
   return loadConfig() !== null;
+}
+
+export function getSessionPath(): string {
+  return SESSION_FILE;
+}
+
+export function loadSession(): SessionData | null {
+  if (!existsSync(SESSION_FILE)) {
+    return null;
+  }
+
+  try {
+    const content = readFileSync(SESSION_FILE, "utf-8");
+    const session = JSON.parse(content) as SessionData;
+
+    if (session.ticket && session.csrfToken && session.username && session.timestamp) {
+      return session;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function isSessionValid(session: SessionData | null): boolean {
+  if (!session) return false;
+  const age = Date.now() - session.timestamp;
+  return age < SESSION_MAX_AGE_MS;
+}
+
+export function saveSession(session: SessionData): void {
+  if (!existsSync(CONFIG_DIR)) {
+    mkdirSync(CONFIG_DIR, { recursive: true });
+  }
+
+  writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2), { mode: 0o600 });
+}
+
+export function clearSession(): void {
+  if (existsSync(SESSION_FILE)) {
+    unlinkSync(SESSION_FILE);
+  }
 }
