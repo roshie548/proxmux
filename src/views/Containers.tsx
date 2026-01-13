@@ -167,6 +167,7 @@ export function Containers({ modalOpen, onError, onConsoleActiveChange }: Contai
         ticket: termProxy.ticket,
         cookie,
         origin: client.getOrigin(),
+        title: consoleTitle,
         onError: (err) => {
           if (onError) {
             onError("Console Connection Failed", `WebSocket Error: ${err}\n\nURL: ${wsUrl}`);

@@ -2,7 +2,7 @@
  * Terminal WebSocket utility for Proxmox console access
  *
  * Uses a simple pass-through approach - the remote terminal controls the display.
- * Exit with Ctrl+\ (SIGQUIT character) which is reliable across terminals.
+ * Exit with Ctrl+\ (backslash).
  */
 
 import WebSocket from "ws";
@@ -13,11 +13,12 @@ interface TerminalOptions {
   ticket: string;
   cookie?: string;  // PVEAuthCookie for session-based auth (required for console)
   origin?: string;  // Origin header for WebSocket
+  title?: string;   // Title shown in terminal window (includes exit hint)
   onError?: (error: string) => void;
 }
 
 export async function connectTerminal(options: TerminalOptions): Promise<void> {
-  const { wsUrl, user, ticket, cookie, origin, onError } = options;
+  const { wsUrl, user, ticket, cookie, origin, title, onError } = options;
 
   return new Promise((resolve, reject) => {
     let isConnected = false;
@@ -42,7 +43,8 @@ export async function connectTerminal(options: TerminalOptions): Promise<void> {
       if (process.stdin.isTTY) {
         process.stdin.setRawMode?.(false);
       }
-      process.stdout.write("\x1b[?25h");
+      // Reset terminal title and show cursor
+      process.stdout.write("\x1b]0;\x07\x1b[?25h");
     };
 
     const handleError = (error: string) => {
@@ -87,6 +89,10 @@ export async function connectTerminal(options: TerminalOptions): Promise<void> {
         }
         process.stdin.resume();
         process.stdout.write("\x1b[2J\x1b[H");
+
+        // Set terminal title with exit hint
+        const titleText = title ? `${title} - Ctrl+\\ to exit` : "Console - Ctrl+\\ to exit";
+        process.stdout.write(`\x1b]0;${titleText}\x07`);
 
         const authString = `${user}:${ticket}\n`;
         ws.send(authString);
