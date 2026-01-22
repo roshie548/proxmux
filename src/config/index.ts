@@ -7,6 +7,7 @@ export interface ProxmuxConfig {
   user: string;
   tokenId: string;
   tokenSecret: string;
+  skipTlsVerify?: boolean;
 }
 
 export interface SessionData {
@@ -42,9 +43,11 @@ function loadFromEnv(): ProxmuxConfig | null {
   const user = process.env.PROXMOX_USER;
   const tokenId = process.env.PROXMOX_TOKEN_ID;
   const tokenSecret = process.env.PROXMOX_TOKEN_SECRET;
+  const skipTlsVerify = process.env.PROXMOX_SKIP_TLS_VERIFY === "1" ||
+                        process.env.PROXMOX_SKIP_TLS_VERIFY?.toLowerCase() === "true";
 
   if (host && user && tokenId && tokenSecret) {
-    return { host, user, tokenId, tokenSecret };
+    return { host, user, tokenId, tokenSecret, skipTlsVerify };
   }
 
   return null;
@@ -60,7 +63,13 @@ function loadFromFile(): ProxmuxConfig | null {
     const config = JSON.parse(content) as ProxmuxConfig;
 
     if (config.host && config.user && config.tokenId && config.tokenSecret) {
-      return { host: config.host, user: config.user, tokenId: config.tokenId, tokenSecret: config.tokenSecret };
+      return {
+        host: config.host,
+        user: config.user,
+        tokenId: config.tokenId,
+        tokenSecret: config.tokenSecret,
+        skipTlsVerify: config.skipTlsVerify ?? false,
+      };
     }
 
     return null;

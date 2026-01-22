@@ -68,12 +68,13 @@ export function App({ config }: AppProps) {
   }, [appError, openModal, closeModal]);
 
   useInput((input, key) => {
-    if (isEditing || consoleActive || isModalOpen) return;
-
+    // Dismiss error modal on any key
     if (appError) {
       setAppError(null);
       return;
     }
+
+    if (isEditing || consoleActive || isModalOpen) return;
 
     if (input === "?") {
       setShowHelp((prev) => !prev);

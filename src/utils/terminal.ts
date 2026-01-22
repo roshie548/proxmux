@@ -146,6 +146,24 @@ export async function connectTerminal(options: TerminalOptions): Promise<void> {
       });
 
       ws.on("error", (err: Error) => {
+        const msg = err.message.toLowerCase();
+
+        // Detect TLS/certificate errors and provide helpful message
+        if (msg.includes("cert") || msg.includes("ssl") || msg.includes("tls") ||
+            msg.includes("self signed") || msg.includes("unable to verify")) {
+          handleError(
+            "TLS certificate error - your Proxmox server likely uses a self-signed certificate.\n\n" +
+            "To fix this, re-run 'proxmux --config' and answer 'y' to skip TLS verification."
+          );
+          return;
+        }
+
+        // Connection refused / unreachable
+        if (msg.includes("econnrefused") || msg.includes("unreachable")) {
+          handleError(`Connection refused - is Proxmox running at the configured host?`);
+          return;
+        }
+
         handleError(`WebSocket error: ${err.message}`);
       });
 
