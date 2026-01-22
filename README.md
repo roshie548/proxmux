@@ -10,7 +10,7 @@ A terminal UI for managing Proxmox VE, built with [Ink](https://github.com/vadim
 - **Dashboard** - Overview of cluster nodes with CPU, memory, and disk usage
 - **VM Management** - List, start, stop, and reboot virtual machines
 - **Container Management** - List, start, stop, and reboot LXC containers
-- **Console Access** - SSH directly into containers via `pct console`
+- **Console Access** - Interactive terminal access to containers via Proxmox API
 - **Storage View** - View storage pools and usage
 - **Detail View** - Detailed info for VMs/containers including network, resources, and config
 - **Vim-style Navigation** - Use `j`/`k` or arrow keys to navigate
@@ -75,7 +75,13 @@ bun run start
 
 ## Configuration
 
-Create a config file at `~/.config/proxmux/config.json`:
+Run the setup wizard:
+
+```bash
+proxmux --config
+```
+
+Or create a config file manually at `~/.config/proxmux/config.json`:
 
 ```json
 {
@@ -95,7 +101,13 @@ Create a config file at `~/.config/proxmux/config.json`:
 5. **Uncheck** "Privilege Separation" to inherit the user's permissions
 6. Copy the token secret (shown only once)
 
-> **Note:** If you leave "Privilege Separation" checked, you must manually assign permissions to the token under **Datacenter** > **Permissions**. The token needs at minimum `VM.Audit`, `VM.PowerMgmt`, and `Datastore.Audit` on `/` (or specific paths) to list and manage VMs/containers.
+> **Note:** If you leave "Privilege Separation" checked, you must manually assign permissions to the token under **Datacenter** > **Permissions**. The token needs at minimum:
+> - `VM.Audit` - List and view VMs/containers
+> - `VM.PowerMgmt` - Start, stop, and reboot VMs/containers
+> - `Datastore.Audit` - View storage
+> - `VM.Console` or `Sys.Console` - Access container/VM console (optional)
+>
+> These permissions should be set on `/` (or specific paths like `/vms` and `/storage`).
 
 ### Environment Variables
 
@@ -147,7 +159,7 @@ export PROXMOX_TOKEN_SECRET="your-token-secret"
 
 ### Console (Containers)
 
-Select "Console (SSH)" in the detail view to open a `pct console` session. You'll see the container's login prompt. Press `Ctrl+]` or type `exit` to return to proxmux.
+Select "Console" in the detail view to open an interactive terminal session. This uses the Proxmox API (same as the web UI) - no SSH configuration required. Type `exit` or press `Ctrl+\` to return to proxmux.
 
 ## Development
 
