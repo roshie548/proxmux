@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Interactive console access via Proxmox API (WebSocket-based, same as web UI)
+- Password authentication for console with session caching (~2 hour expiry)
+- Terminal title shows container name and exit hint (`Ctrl+\` to disconnect)
+- Setup wizard hint in README (`proxmux --config`)
+
+### Changed
+- Console no longer requires SSH configuration
+
+### Security
+- Session file restricted to owner-only permissions (0600)
+
 ## [0.4.0] - 2026-01-05
 
 ### Added
